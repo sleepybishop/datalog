@@ -104,9 +104,6 @@ void facts_reset(s_facts *facts)
     if (facts->symbols_delete) {
         delete_intern(facts->symbols);
         facts->symbols = new_intern(max);
-    } else {
-        intern_destroy(facts->symbols);
-        intern_init(facts->symbols, max);
     }
 
     // 5. Reset transaction data/state

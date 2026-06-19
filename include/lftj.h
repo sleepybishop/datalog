@@ -32,5 +32,7 @@ int iterator_up(s_lftj_iterator *it);
 
 // Leapfrog Triejoin Solver
 int facts_lftj_solve(struct facts *facts, p_spec spec, s_binding *bindings);
+int facts_lftj_solve_multi(struct facts *facts, struct facts **dbs, p_spec spec, s_binding *bindings,
+                           void (*cb)(s_binding *bindings, void *user_data), void *user_data);
 
 #endif

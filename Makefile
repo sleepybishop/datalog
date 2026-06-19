@@ -12,7 +12,11 @@ lib/lftj.o\
 lib/transaction.o\
 lib/sparql.o\
 lib/facts.o\
-lib/spec.o
+lib/spec.o\
+lib/rule.o\
+lib/eval.o\
+lib/magic.o
+
 
 
 
@@ -24,7 +28,10 @@ t/00util/test/check_set\
 t/00util/test/check_spec\
 t/00util/test/check_triejoin\
 t/00util/test/check_movie_integration\
-t/00util/test/check_sparql
+t/00util/test/check_sparql\
+t/00util/test/check_rule\
+t/00util/test/check_eval\
+t/00util/test/check_magic
 
 
 
@@ -34,13 +41,17 @@ t/00util/bench/benchmark_facts_with\
 t/00util/bench/benchmark_set_add\
 t/00util/bench/benchmark_set_add_overflow\
 t/00util/bench/benchmark_set_get\
-t/00util/bench/benchmark_set_remove
+t/00util/bench/benchmark_set_remove\
+t/00util/bench/benchmark_query_ns
 
 CPPFLAGS = -Iinclude -Ideps/rax -D_DEFAULT_SOURCE
 CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC
 LDLIBS = -lm
 
 all: libdatalog.a sparql_repl
+
+t/00util/bench/benchmark_query_ns: t/00util/bench/benchmark_query_ns.o $(OBJ)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
 t/00util/bench/benchmark_facts_add: t/00util/bench/benchmark_facts_add.o $(OBJ)
 
@@ -69,6 +80,12 @@ t/00util/test/check_triejoin: t/00util/test/check_triejoin.o $(OBJ)
 t/00util/test/check_movie_integration: t/00util/test/check_movie_integration.o $(OBJ)
 
 t/00util/test/check_sparql: t/00util/test/check_sparql.o $(OBJ)
+
+t/00util/test/check_rule: t/00util/test/check_rule.o $(OBJ)
+
+t/00util/test/check_eval: t/00util/test/check_eval.o $(OBJ)
+
+t/00util/test/check_magic: t/00util/test/check_magic.o $(OBJ)
 
 
 check: CFLAGS=-O0 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused
