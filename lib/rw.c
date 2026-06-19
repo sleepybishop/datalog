@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "rw.h"
 
 int write_string_quoted(const char *string, FILE *fp)
@@ -32,6 +33,7 @@ int write_string_quoted(const char *string, FILE *fp)
         case '\\':
             if (fwrite("\\", 1, 1, fp) != 1)
                 return -1;
+            /* fallthrough */
         default:
             if (fwrite(string + i, 1, 1, fp) != 1)
                 return -1;
