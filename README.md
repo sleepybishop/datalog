@@ -1,4 +1,4 @@
-# facts_db
+# facts_db [![CI](https://github.com/sleepybishop/facts_db/actions/workflows/ci.yml/badge.svg)](https://github.com/sleepybishop/facts_db/actions/workflows/ci.yml)
 
 Graph database in C.
 
