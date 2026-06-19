@@ -1,60 +1,120 @@
-/*
- *  facts_db - in-memory graph database
- *  Copyright 2020 Thomas de Grivel <thoxdg@gmail.com>
- *
- *  Permission to use, copy, modify, and distribute this software for any
- *  purpose with or without fee is hereby granted, provided that the above
- *  copyright notice and this permission notice appear in all copies.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- *  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- *  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- *  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- *  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- *  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-
 #include <assert.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include "facts.h"
+#include "arena.h"
 #include "random.h"
-#include "rw.h"
+#include "io.h"
+#include "lftj.h"
 
-void facts_init(s_facts *facts, s_set *symbols, unsigned long max)
+void facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact);
+
+static inline uint64_t get_symbol_id(Symbol ptr)
 {
-    unsigned long height;
+    if (ptr == P_FIRST)
+        return 0;
+    if (ptr == P_LAST)
+        return 0xFFFFFFFFFFFFFFFFULL;
+    return ptr->id;
+}
+
+static inline void encode_uint64_be(unsigned char *buf, uint64_t val)
+{
+    buf[0] = (val >> 56) & 0xFF;
+    buf[1] = (val >> 48) & 0xFF;
+    buf[2] = (val >> 40) & 0xFF;
+    buf[3] = (val >> 32) & 0xFF;
+    buf[4] = (val >> 24) & 0xFF;
+    buf[5] = (val >> 16) & 0xFF;
+    buf[6] = (val >> 8) & 0xFF;
+    buf[7] = val & 0xFF;
+}
+
+static void encode_cursor_key(unsigned char *key, const s_fact *f, int index_type)
+{
+    if (index_type == 0) { // SPO
+        encode_uint64_be(key, get_symbol_id(f->s));
+        encode_uint64_be(key + 8, get_symbol_id(f->p));
+        encode_uint64_be(key + 16, get_symbol_id(f->o));
+    } else if (index_type == 1) { // POS
+        encode_uint64_be(key, get_symbol_id(f->p));
+        encode_uint64_be(key + 8, get_symbol_id(f->o));
+        encode_uint64_be(key + 16, get_symbol_id(f->s));
+    } else { // OSP
+        encode_uint64_be(key, get_symbol_id(f->o));
+        encode_uint64_be(key + 8, get_symbol_id(f->s));
+        encode_uint64_be(key + 16, get_symbol_id(f->p));
+    }
+}
+
+void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
+{
     assert(facts);
-    facts->symbols = symbols ? symbols : new_set(max);
+    arena_init();
+    facts->symbols = symbols ? symbols : new_intern(max);
     facts->symbols_delete = !symbols;
     set_init(&facts->index, max);
-    height = log(max) / log(FACTS_SKIPLIST_SPACING);
-    facts->index_spo = new_skiplist(height, FACTS_SKIPLIST_SPACING);
-    assert(facts->index_spo);
-    facts->index_spo->compare = fact_compare_spo;
-    facts->index_pos = new_skiplist(height, FACTS_SKIPLIST_SPACING);
-    assert(facts->index_pos);
-    facts->index_pos->compare = fact_compare_pos;
-    facts->index_osp = new_skiplist(height, FACTS_SKIPLIST_SPACING);
-    assert(facts->index_osp);
-    facts->index_osp->compare = fact_compare_osp;
+    facts->hexastore = new_hexastore();
+    facts->index_spo = facts->hexastore->trie_spo;
+    facts->index_pos = facts->hexastore->trie_pos;
+    facts->index_osp = facts->hexastore->trie_osp;
     facts->log = NULL;
+
+    transaction_init(&facts->tx);
 }
 
 void facts_destroy(s_facts *facts)
 {
-    delete_skiplist(facts->index_spo);
-    delete_skiplist(facts->index_pos);
-    delete_skiplist(facts->index_osp);
+    delete_hexastore(facts->hexastore);
     set_destroy(&facts->index);
     if (facts->symbols_delete)
-        delete_set(facts->symbols);
+        delete_intern(facts->symbols);
+    transaction_destroy(&facts->tx);
+    arena_destroy();
 }
 
-s_facts *new_facts(s_set *symbols, unsigned long max)
+void facts_reset(s_facts *facts)
+{
+    unsigned long max;
+    s_set_cursor sc;
+    s_set_item *si;
+    assert(facts);
+
+    // 1. Recycle all facts back into the fact arena pool
+    set_cursor_init(&facts->index, &sc);
+    while ((si = set_cursor_next(&sc))) {
+        arena_free_fact(si->data);
+    }
+
+    // 2. Destroy and recreate the hexastore index
+    delete_hexastore(facts->hexastore);
+    facts->hexastore = new_hexastore();
+    facts->index_spo = facts->hexastore->trie_spo;
+    facts->index_pos = facts->hexastore->trie_pos;
+    facts->index_osp = facts->hexastore->trie_osp;
+
+    // 3. Destroy and recreate the facts index hash set
+    max = facts->index.max;
+    set_destroy(&facts->index);
+    set_init(&facts->index, max);
+
+    // 4. Clear the symbol interning table
+    if (facts->symbols_delete) {
+        delete_intern(facts->symbols);
+        facts->symbols = new_intern(max);
+    } else {
+        intern_destroy(facts->symbols);
+        intern_init(facts->symbols, max);
+    }
+
+    // 5. Reset transaction data/state
+    transaction_destroy(&facts->tx);
+    transaction_init(&facts->tx);
+}
+
+s_facts *new_facts(s_intern *symbols, unsigned long max)
 {
     s_facts *facts = malloc(sizeof(s_facts));
     if (facts)
@@ -70,100 +130,42 @@ void delete_facts(s_facts *facts)
 
 s_set_item *facts_find_symbol(s_facts *facts, const char *string)
 {
-    size_t len;
-    assert(facts);
-    assert(string);
-    len = strlen(string);
-    return set_get(facts->symbols, string, len);
+    return intern_find_symbol(facts->symbols, string);
 }
 
-const char *facts_find_symbol_str(s_facts *facts, const char *string)
+Symbol facts_find_symbol_str(s_facts *facts, const char *string)
 {
-    s_set_item *si = facts_find_symbol(facts, string);
-    if (si)
-        return si->data;
-    return NULL;
+    return intern_find_symbol_str(facts->symbols, string);
 }
 
 const char *facts_long(s_facts *facts, long l)
 {
-    char buf[48];
-    snprintf(buf, sizeof(buf), "%li", l);
-    return facts_intern(facts, buf);
+    return symbol_to_str(intern_long(facts->symbols, l));
 }
 
 const char *facts_double(s_facts *facts, double d)
 {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%.16g", d);
-    return facts_intern(facts, buf);
+    return symbol_to_str(intern_double(facts->symbols, d));
 }
 
 long facts_get_long(s_facts *facts, const char *string)
 {
-    s_set_item *i;
-    assert(facts);
-    assert(string);
-    i = facts_find_symbol(facts, string);
-    if (i) {
-        if (!i->long_p) {
-            i->long_value = atol(string);
-            i->long_p = 1;
-        }
-        return i->long_value;
-    }
-    return 0;
+    return intern_get_long(facts->symbols, string);
 }
 
 double facts_get_double(s_facts *facts, const char *string)
 {
-    s_set_item *i;
-    assert(facts);
-    assert(string);
-    i = facts_find_symbol(facts, string);
-    if (i) {
-        if (!i->double_p) {
-            i->double_value = atol(string);
-            i->double_p = 1;
-        }
-        return i->double_value;
-    }
-    return 0.0;
+    return intern_get_double(facts->symbols, string);
 }
 
-s_set_item *facts_add_symbol(s_facts *facts, const char *string, size_t len)
+Symbol facts_intern(s_facts *facts, const char *string)
 {
-    char *data = malloc(len + 1);
-    memcpy(data, string, len + 1);
-    return set_add(facts->symbols, data, len);
+    return intern_string(facts->symbols, string);
 }
 
-const char *facts_intern(s_facts *facts, const char *string)
+void facts_unintern(s_facts *facts, Symbol sym)
 {
-    s_set_item *i;
-    size_t len;
-    assert(facts);
-    assert(string);
-    len = strlen(string);
-    i = set_get(facts->symbols, string, len);
-    if (!i)
-        i = facts_add_symbol(facts, string, len);
-    assert(i);
-    i->usage++;
-    return i->data;
-}
-
-void facts_unintern(s_facts *facts, const char *string)
-{
-    s_set_item *i;
-    assert(facts);
-    assert(string);
-    i = facts_find_symbol(facts, string);
-    if (i) {
-        i->usage--;
-        if (!i->usage)
-            set_remove(facts->symbols, i);
-    }
+    intern_unstring(facts->symbols, sym);
 }
 
 void random_id(char *buf, size_t len)
@@ -201,31 +203,35 @@ const char *facts_anon(s_facts *facts, const char *name)
         random_id(b, 10);
         b[10] = 0;
         if (!facts_find_symbol(facts, buf))
-            return facts_intern(facts, buf);
+            return symbol_to_str(facts_intern(facts, buf));
     }
     return NULL;
 }
 
 s_fact *facts_add_fact(s_facts *facts, s_fact *f)
 {
-    s_fact intern;
     s_fact *found;
     s_fact *new;
     assert(facts);
     assert(f);
-    intern.s = facts_intern(facts, f->s);
-    intern.p = facts_intern(facts, f->p);
-    intern.o = facts_intern(facts, f->o);
-    if ((found = facts_get_fact(facts, &intern)))
+    int has_lock = transaction_acquire_writer(&facts->tx);
+    s_set_item *si = set_get(&facts->index, f, sizeof(s_fact));
+    if (si) {
+        found = (s_fact *)si->data;
+        transaction_release_writer(&facts->tx, has_lock);
         return found;
+    }
     if (facts->log)
-        write_fact_log("add", &intern, facts->log);
-    new = new_fact(intern.s, intern.p, intern.o);
+        write_fact_log("add", f, facts->log);
+    new = new_fact(f->s, f->p, f->o);
     assert(new);
-    skiplist_insert(facts->index_spo, new);
-    skiplist_insert(facts->index_pos, new);
-    skiplist_insert(facts->index_osp, new);
+    facts_intern(facts, symbol_to_str(new->s));
+    facts_intern(facts, symbol_to_str(new->p));
+    facts_intern(facts, symbol_to_str(new->o));
+    hexastore_insert(facts->hexastore, new);
     set_add(&facts->index, new, sizeof(s_fact));
+    facts_rollback_push(facts, ROLLBACK_REMOVE, new);
+    transaction_release_writer(&facts->tx, has_lock);
     return new;
 }
 
@@ -236,10 +242,15 @@ s_fact *facts_add_spo(s_facts *facts, const char *s, const char *p, const char *
     assert(s);
     assert(p);
     assert(o);
-    f.s = s;
-    f.p = p;
-    f.o = o;
-    return facts_add_fact(facts, &f);
+    f.s = facts_intern(facts, s);
+    f.p = facts_intern(facts, p);
+    f.o = facts_intern(facts, o);
+    f.negated = NULL;
+    s_fact *ret = facts_add_fact(facts, &f);
+    facts_unintern(facts, f.s);
+    facts_unintern(facts, f.p);
+    facts_unintern(facts, f.o);
+    return ret;
 }
 
 const char **spec_bindings_anon_assoc(s_facts *facts, p_spec spec)
@@ -280,23 +291,38 @@ int facts_add(s_facts *facts, p_spec spec)
 {
     const char **anon;
     s_spec_cursor c;
-    s_fact f;
+    s_spec_fact f;
     assert(facts);
     assert(spec);
+    int has_lock = transaction_acquire_writer(&facts->tx);
     anon = spec_bindings_anon_assoc(facts, spec);
-    if (!anon)
+    if (!anon) {
+        transaction_release_writer(&facts->tx, has_lock);
         return -1;
+    }
     spec_cursor_init(&c, spec);
     while (spec_cursor_next(&c, &f)) {
+        if (f.negated)
+            continue;
         if (f.s[0] == '?')
             f.s = assoc_get(anon, f.s);
         if (f.p[0] == '?')
             f.p = assoc_get(anon, f.p);
         if (f.o[0] == '?')
             f.o = assoc_get(anon, f.o);
-        facts_add_fact(facts, &f);
+
+        s_fact db_fact;
+        db_fact.s = facts_intern(facts, f.s);
+        db_fact.p = facts_intern(facts, f.p);
+        db_fact.o = facts_intern(facts, f.o);
+        db_fact.negated = NULL;
+        facts_add_fact(facts, &db_fact);
+        facts_unintern(facts, db_fact.s);
+        facts_unintern(facts, db_fact.p);
+        facts_unintern(facts, db_fact.o);
     }
     free(anon);
+    transaction_release_writer(&facts->tx, has_lock);
     return 0;
 }
 
@@ -304,18 +330,24 @@ int facts_remove_fact(s_facts *facts, s_fact *f)
 {
     s_fact *found;
     assert(facts);
-    found = skiplist_remove(facts->index_spo, f);
-    if (found) {
-        skiplist_remove(facts->index_pos, found);
-        skiplist_remove(facts->index_osp, found);
+    assert(f);
+    int has_lock = transaction_acquire_writer(&facts->tx);
+    s_set_item *si = set_get(&facts->index, f, sizeof(s_fact));
+    if (si) {
+        found = (s_fact *)si->data;
+        set_remove(&facts->index, si);
         if (facts->log)
             write_fact_log("remove", found, facts->log);
+        facts_rollback_push(facts, ROLLBACK_ADD, found);
+        hexastore_remove(facts->hexastore, found);
         facts_unintern(facts, found->s);
         facts_unintern(facts, found->p);
         facts_unintern(facts, found->o);
         delete_fact(found);
+        transaction_release_writer(&facts->tx, has_lock);
         return 1;
     }
+    transaction_release_writer(&facts->tx, has_lock);
     return 0;
 }
 
@@ -326,9 +358,16 @@ int facts_remove_spo(s_facts *facts, const char *s, const char *p, const char *o
     assert(s);
     assert(p);
     assert(o);
-    f.s = s;
-    f.p = p;
-    f.o = o;
+    Symbol s_sym = facts_find_symbol_str(facts, s);
+    Symbol p_sym = facts_find_symbol_str(facts, p);
+    Symbol o_sym = facts_find_symbol_str(facts, o);
+    if (!s_sym || !p_sym || !o_sym) {
+        return 0;
+    }
+    f.s = s_sym;
+    f.p = p_sym;
+    f.o = o_sym;
+    f.negated = NULL;
     return facts_remove_fact(facts, &f);
 }
 
@@ -339,17 +378,22 @@ int facts_remove(s_facts *facts, p_spec spec)
     s_fact_list *fl = NULL;
     s_fact_list *fli;
     int found = 0;
+    int has_lock = transaction_acquire_writer(&facts->tx);
     bindings = spec_bindings(spec);
     facts_with(facts, bindings, &wc, spec);
     while (facts_with_cursor_next(&wc)) {
-        s_fact f;
+        s_spec_fact f;
         s_spec_cursor sc;
         spec_cursor_init(&sc, spec);
         while (spec_cursor_next(&sc, &f)) {
+            if (f.negated)
+                continue;
             s_fact *dbf;
-            fact_bindings_resolve(&f, bindings);
-            dbf = facts_get_fact(facts, &f);
-            fl = fact_list_intern(fl, dbf);
+            spec_fact_bindings_resolve(&f, bindings);
+            dbf = facts_get_spo(facts, f.s, f.p, f.o);
+            if (dbf) {
+                fl = fact_list_intern(fl, dbf);
+            }
         }
     }
     facts_with_cursor_destroy(&wc);
@@ -361,22 +405,16 @@ int facts_remove(s_facts *facts, p_spec spec)
         fli = fli->next;
     }
     delete_fact_list(fl);
+    transaction_release_writer(&facts->tx, has_lock);
     return found;
 }
 
 s_fact *facts_get_fact(s_facts *facts, s_fact *f)
 {
-    s_fact fact;
-    s_set_item *si;
     assert(facts);
     assert(f);
-    if (!(fact.s = facts_find_symbol_str(facts, f->s)))
-        return NULL;
-    if (!(fact.p = facts_find_symbol_str(facts, f->p)))
-        return NULL;
-    if (!(fact.o = facts_find_symbol_str(facts, f->o)))
-        return NULL;
-    if ((si = set_get(&facts->index, &fact, sizeof(s_fact))))
+    s_set_item *si = set_get(&facts->index, f, sizeof(s_fact));
+    if (si)
         return (s_fact *)si->data;
     return NULL;
 }
@@ -384,44 +422,66 @@ s_fact *facts_get_fact(s_facts *facts, s_fact *f)
 s_fact *facts_get_spo(s_facts *facts, const char *s, const char *p, const char *o)
 {
     s_fact f;
-    f.s = s;
-    f.p = p;
-    f.o = o;
+    Symbol s_sym = facts_find_symbol_str(facts, s);
+    Symbol p_sym = facts_find_symbol_str(facts, p);
+    Symbol o_sym = facts_find_symbol_str(facts, o);
+    if (!s_sym || !p_sym || !o_sym) {
+        return NULL;
+    }
+    f.s = s_sym;
+    f.p = p_sym;
+    f.o = o_sym;
+    f.negated = NULL;
     return facts_get_fact(facts, &f);
 }
 
 unsigned long facts_count(s_facts *facts)
 {
     assert(facts);
-    return facts->index_spo->length;
+    return raxSize(facts->index_spo);
 }
 
-void facts_cursor_init(s_facts *facts, s_facts_cursor *c, s_skiplist *tree, s_fact *start, s_fact *end)
+void facts_cursor_init(s_facts *facts, s_facts_cursor *c, rax *tree, s_fact *start, s_fact *end)
 {
-    s_skiplist_node *pred;
-    (void)facts;
     assert(facts);
     assert(c);
     assert(tree);
-    pred = skiplist_pred(tree, start);
-    assert(pred);
-    c->tree = tree;
-    c->node = skiplist_node_next(pred, 0);
-    if (start)
-        c->start = *start;
-    else {
-        c->start.s = P_FIRST;
-        c->start.p = P_FIRST;
-        c->start.o = P_FIRST;
+
+    c->index_type = 0;
+    if (tree == facts->index_pos) {
+        c->index_type = 1;
+    } else if (tree == facts->index_osp) {
+        c->index_type = 2;
     }
-    if (end)
-        c->end = *end;
-    else {
-        c->end.s = P_LAST;
-        c->end.p = P_LAST;
-        c->end.o = P_LAST;
+
+    raxStart(&c->it, tree);
+
+    unsigned char start_key[24];
+    s_fact resolved_start, resolved_end;
+
+    if (start) {
+        resolved_start = *start;
+    } else {
+        resolved_start.s = P_FIRST;
+        resolved_start.p = P_FIRST;
+        resolved_start.o = P_FIRST;
     }
-    delete_skiplist_node(pred);
+
+    if (end) {
+        resolved_end = *end;
+    } else {
+        resolved_end.s = P_LAST;
+        resolved_end.p = P_LAST;
+        resolved_end.o = P_LAST;
+    }
+
+    encode_cursor_key(start_key, &resolved_start, c->index_type);
+    encode_cursor_key(c->end_key, &resolved_end, c->index_type);
+
+    raxSeek(&c->it, ">=", start_key, 24);
+    c->it.flags &= ~RAX_ITER_JUST_SEEKED;
+
+    c->started = 0;
     c->var_s = NULL;
     c->var_p = NULL;
     c->var_o = NULL;
@@ -430,21 +490,33 @@ void facts_cursor_init(s_facts *facts, s_facts_cursor *c, s_skiplist *tree, s_fa
 s_fact *facts_cursor_next(s_facts_cursor *c)
 {
     assert(c);
-    if (c->node) {
-        c->node = skiplist_node_next(c->node, 0);
-        if (c->node && c->tree->compare(c->node->value, &c->end) > 0)
-            c->node = NULL;
+    if (c->started == 2) {
+        return NULL;
     }
-    if (c->node) {
-        s_fact *f = (s_fact *)c->node->value;
-        if (c->var_s)
-            *c->var_s = f->s;
-        if (c->var_p)
-            *c->var_p = f->p;
-        if (c->var_o)
-            *c->var_o = f->o;
-        return f;
+    if (c->started == 0) {
+        c->started = 1;
+    } else {
+        if (!raxEOF(&c->it)) {
+            raxNext(&c->it);
+        }
     }
+
+    if (!raxEOF(&c->it)) {
+        if (memcmp(c->it.key, c->end_key, 24) <= 0) {
+            s_fact *f = (s_fact *)c->it.data;
+            if (c->var_s)
+                *c->var_s = symbol_to_str(f->s);
+            if (c->var_p)
+                *c->var_p = symbol_to_str(f->p);
+            if (c->var_o)
+                *c->var_o = symbol_to_str(f->o);
+            return f;
+        }
+    }
+
+    raxStop(&c->it);
+    c->started = 2;
+
     if (c->var_s)
         *c->var_s = NULL;
     if (c->var_p)
@@ -452,6 +524,14 @@ s_fact *facts_cursor_next(s_facts_cursor *c)
     if (c->var_o)
         *c->var_o = NULL;
     return NULL;
+}
+
+void facts_cursor_stop(s_facts_cursor *c)
+{
+    if (c && c->started != 2) {
+        raxStop(&c->it);
+        c->started = 2;
+    }
 }
 
 void facts_with_3(s_facts *facts, s_facts_cursor *c, const char *s, const char *p, const char *o)
@@ -462,9 +542,18 @@ void facts_with_3(s_facts *facts, s_facts_cursor *c, const char *s, const char *
     assert(s);
     assert(p);
     assert(o);
-    f.s = s;
-    f.p = p;
-    f.o = o;
+    Symbol interned_s = facts_find_symbol_str(facts, s);
+    Symbol interned_p = facts_find_symbol_str(facts, p);
+    Symbol interned_o = facts_find_symbol_str(facts, o);
+    if (!interned_s || !interned_p || !interned_o) {
+        facts_cursor_init(facts, c, facts->index_spo, NULL, NULL);
+        facts_cursor_stop(c);
+        return;
+    }
+    f.s = interned_s;
+    f.p = interned_p;
+    f.o = interned_o;
+    f.negated = NULL;
     facts_cursor_init(facts, c, facts->index_spo, &f, &f);
 }
 
@@ -483,19 +572,27 @@ void facts_with_1_2(s_facts *facts, s_facts_cursor *c, const char *s, const char
 {
     s_fact start;
     s_fact end;
-    s_skiplist *tree;
+    struct rax *tree;
     assert(facts);
     assert(c);
     assert(s);
     assert(p);
     assert(o);
     assert(var_s || var_p || var_o);
-    start.s = var_s ? P_FIRST : s;
-    start.p = var_p ? P_FIRST : p;
-    start.o = var_o ? P_FIRST : o;
-    end.s = var_s ? P_LAST : s;
-    end.p = var_p ? P_LAST : p;
-    end.o = var_o ? P_LAST : o;
+    Symbol interned_s = var_s ? NULL : facts_find_symbol_str(facts, s);
+    Symbol interned_p = var_p ? NULL : facts_find_symbol_str(facts, p);
+    Symbol interned_o = var_o ? NULL : facts_find_symbol_str(facts, o);
+    if ((!var_s && !interned_s) || (!var_p && !interned_p) || (!var_o && !interned_o)) {
+        facts_cursor_init(facts, c, facts->index_spo, NULL, NULL);
+        facts_cursor_stop(c);
+        return;
+    }
+    start.s = var_s ? P_FIRST : interned_s;
+    start.p = var_p ? P_FIRST : interned_p;
+    start.o = var_o ? P_FIRST : interned_o;
+    end.s = var_s ? P_LAST : interned_s;
+    end.p = var_p ? P_LAST : interned_p;
+    end.o = var_o ? P_LAST : interned_o;
     tree = (!var_s && var_o) ? facts->index_spo : !var_p ? facts->index_pos : facts->index_osp;
     facts_cursor_init(facts, c, tree, &start, &end);
     c->var_s = var_s;
@@ -530,34 +627,90 @@ void facts_with(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_s
     assert(facts);
     assert(c);
     assert(spec);
+    pthread_t self = pthread_self();
+    int has_lock = pthread_equal(facts->tx.owner, self);
+    if (!has_lock) {
+        transaction_acquire_reader(&facts->tx);
+        c->locked = 1;
+    } else {
+        c->locked = 0;
+    }
     facts_count = spec_count_facts(spec);
     c->facts = facts;
     c->bindings = bindings;
     bindings_nullify(c->bindings);
     c->facts_count = facts_count;
     if (facts_count > 0) {
-        c->l = calloc(facts_count, sizeof(s_facts_with_cursor_level));
+        size_t total_ptrs = 0;
+        for (size_t i = 0; i < facts_count; i++) {
+            total_ptrs += (facts_count - i) * 4 + 2;
+        }
+        size_t levels_sz = facts_count * sizeof(s_facts_with_cursor_level);
+        size_t specs_sz = total_ptrs * sizeof(const char *);
+        char *mem = calloc(1, levels_sz + specs_sz);
+        assert(mem);
+        c->l = (s_facts_with_cursor_level *)mem;
+        const char **spec_ptr = (const char **)(mem + levels_sz);
         c->spec = spec_expand(spec);
-        spec_sort(c->spec);
+        facts_spec_sort(facts, c->spec, facts_count);
+        for (size_t i = 0; i < facts_count; i++) {
+            size_t remaining = facts_count - i;
+            c->l[i].spec = spec_ptr;
+            spec_ptr += remaining * 4 + 2;
+            c->l[i].spec_init = 0;
+        }
     } else {
         c->l = NULL;
         c->spec = NULL;
     }
     c->level = 0;
+    c->limit = -1;
+    c->offset = 0;
+    c->result_count = 0;
+    c->is_sorted = 0;
+    c->sort_var = NULL;
+    c->sort_desc = 0;
+    c->sorted_matches = NULL;
+    c->sorted_count = 0;
+    c->sorted_pos = 0;
 }
 
 void facts_with_cursor_destroy(s_facts_with_cursor *c)
 {
     assert(c);
-    free(c->l);
+    if (c->l) {
+        for (size_t i = 0; i < c->facts_count; i++) {
+            if (c->l[i].spec_init) {
+                facts_cursor_stop(&c->l[i].c);
+            }
+        }
+        free(c->l);
+    }
     if (c->spec)
         free(c->spec);
+    if (c->locked && c->facts) {
+        transaction_release_reader(&c->facts->tx);
+    }
+    if (c->sorted_matches) {
+        typedef struct {
+            const char **values;
+        } s_cached_match_local;
+        s_cached_match_local *matches = (s_cached_match_local *)c->sorted_matches;
+        for (size_t i = 0; i < c->sorted_count; i++) {
+            free(matches[i].values);
+        }
+        free(matches);
+    }
+    if (c->sort_var) {
+        free(c->sort_var);
+    }
     c->facts = NULL;
     c->bindings = NULL;
     c->facts_count = 0;
     c->l = NULL;
     c->level = 0;
     c->spec = NULL;
+    c->locked = 0;
 }
 
 void spec_subst(p_spec spec, s_binding *bindings)
@@ -574,48 +727,248 @@ void spec_subst(p_spec spec, s_binding *bindings)
         }
 }
 
+int facts_with_cursor_next_inner(s_facts_with_cursor *c);
+
+typedef struct {
+    const char **values;
+} s_cached_match;
+
+static void swap_matches(s_cached_match *a, s_cached_match *b)
+{
+    s_cached_match tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+
+static int compare_matches(const s_cached_match *a, const s_cached_match *b, int idx, int desc)
+{
+    const char *val_a = a->values[idx];
+    const char *val_b = b->values[idx];
+    if (!val_a && !val_b)
+        return 0;
+    if (!val_a)
+        return desc ? 1 : -1;
+    if (!val_b)
+        return desc ? -1 : 1;
+    int cmp = strcmp(val_a, val_b);
+    return desc ? -cmp : cmp;
+}
+
+static void quicksort_matches(s_cached_match *arr, int low, int high, int idx, int desc)
+{
+    if (low < high) {
+        s_cached_match pivot = arr[high];
+        int i = low - 1;
+        for (int j = low; j < high; j++) {
+            if (compare_matches(&arr[j], &pivot, idx, desc) <= 0) {
+                i++;
+                swap_matches(&arr[i], &arr[j]);
+            }
+        }
+        swap_matches(&arr[i + 1], &arr[high]);
+        int pi = i + 1;
+        quicksort_matches(arr, low, pi - 1, idx, desc);
+        quicksort_matches(arr, pi + 1, high, idx, desc);
+    }
+}
+
+int facts_with_cursor_next_inner(s_facts_with_cursor *c);
+
 int facts_with_cursor_next(s_facts_with_cursor *c)
+{
+    if (c->is_sorted) {
+        if (!c->sorted_matches && c->sorted_pos == 0) {
+            size_t capacity = 16;
+            c->sorted_matches = malloc(capacity * sizeof(s_cached_match));
+            c->sorted_count = 0;
+
+            int bindings_count = 0;
+            while (c->bindings && c->bindings[bindings_count].name) {
+                bindings_count++;
+            }
+
+            long orig_limit = c->limit;
+            long orig_offset = c->offset;
+            c->limit = -1;
+            c->offset = 0;
+
+            c->is_sorted = 0;
+            while (facts_with_cursor_next(c)) {
+                if (c->sorted_count >= capacity) {
+                    capacity *= 2;
+                    c->sorted_matches = realloc(c->sorted_matches, capacity * sizeof(s_cached_match));
+                }
+                s_cached_match *matches = (s_cached_match *)c->sorted_matches;
+                matches[c->sorted_count].values = malloc(bindings_count * sizeof(const char *));
+                for (int i = 0; i < bindings_count; i++) {
+                    matches[c->sorted_count].values[i] = *c->bindings[i].value;
+                }
+                c->sorted_count++;
+            }
+            c->is_sorted = 1;
+
+            c->limit = orig_limit;
+            c->offset = orig_offset;
+            c->result_count = 0;
+
+            int sort_idx = -1;
+            if (c->sort_var) {
+                for (int i = 0; i < bindings_count; i++) {
+                    if (strcmp(c->bindings[i].name, c->sort_var) == 0) {
+                        sort_idx = i;
+                        break;
+                    }
+                }
+            }
+
+            if (sort_idx >= 0 && c->sorted_count > 1) {
+                quicksort_matches((s_cached_match *)c->sorted_matches, 0, (int)c->sorted_count - 1, sort_idx, c->sort_desc);
+            }
+
+            c->sorted_pos = 0;
+        }
+
+        while (c->offset > 0) {
+            c->offset--;
+            if (c->sorted_pos < c->sorted_count) {
+                c->sorted_pos++;
+            } else {
+                return 0;
+            }
+        }
+
+        if (c->limit >= 0 && c->result_count >= c->limit) {
+            return 0;
+        }
+
+        if (c->sorted_pos < c->sorted_count) {
+            s_cached_match *matches = (s_cached_match *)c->sorted_matches;
+            int bindings_count = 0;
+            while (c->bindings && c->bindings[bindings_count].name) {
+                bindings_count++;
+            }
+            for (int i = 0; i < bindings_count; i++) {
+                *c->bindings[i].value = matches[c->sorted_pos].values[i];
+            }
+            c->sorted_pos++;
+            c->result_count++;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (c->limit >= 0 && c->result_count >= c->limit) {
+        return 0;
+    }
+
+    while (c->offset > 0) {
+        c->offset--;
+        if (!facts_with_cursor_next_inner(c)) {
+            return 0;
+        }
+    }
+
+    int ok = facts_with_cursor_next_inner(c);
+    if (ok) {
+        c->result_count++;
+    }
+    return ok;
+}
+
+int facts_with_cursor_next_inner(s_facts_with_cursor *c)
 {
     assert(c);
     if (!c->facts_count)
         return 0;
     if (c->level == c->facts_count) {
         s_facts_with_cursor_level *l = c->l + (c->facts_count - 1);
-        l->fact = facts_cursor_next(&l->c);
-        if (l->fact)
-            return 1;
-        free(l->spec);
-        l->spec = NULL;
-        c->level--;
-        if (!c->level) {
-            c->facts_count = 0;
-            return 0;
+        if (l->spec[3] && strcmp(l->spec[3], ":not") == 0) {
+            facts_cursor_stop(&l->c);
+            l->spec_init = 0;
+            c->level--;
+            if (!c->level) {
+                c->facts_count = 0;
+                return 0;
+            }
+            c->level--;
+        } else {
+            l->fact = facts_cursor_next(&l->c);
+            if (l->fact)
+                return 1;
+            facts_cursor_stop(&l->c);
+            l->spec_init = 0;
+            c->level--;
+            if (!c->level) {
+                c->facts_count = 0;
+                return 0;
+            }
+            c->level--;
         }
-        c->level--;
     }
     while (c->level < c->facts_count) {
         s_facts_with_cursor_level *l = c->l + c->level;
-        if (!l->spec) {
+        if (!l->spec_init) {
             p_spec parent_spec = c->level ? c->l[c->level - 1].spec + 4 : c->spec;
-            l->spec = spec_expand(parent_spec);
+            size_t remaining = c->facts_count - c->level;
+            memcpy(l->spec, parent_spec, (remaining * 4 + 1) * sizeof(const char *));
+            l->spec[remaining * 4 + 1] = NULL;
             spec_subst(l->spec, c->bindings);
             facts_with_spo(c->facts, c->bindings, &l->c, l->spec[0], l->spec[1], l->spec[2]);
+            l->spec_init = 1;
         }
-        l->fact = facts_cursor_next(&l->c);
-        if (l->fact)
-            c->level++;
-        else {
-            free(l->spec);
-            l->spec = NULL;
-            if (c->level > 0) {
-                c->level--;
-                if (!c->level) {
+
+        if (l->spec[3] && strcmp(l->spec[3], ":not") == 0) {
+            // Negated level:
+            // Save bindings to isolate from potential variable matching
+            int bindings_count = 0;
+            while (c->bindings && c->bindings[bindings_count].name)
+                bindings_count++;
+            const char **saved_values = NULL;
+            if (bindings_count > 0) {
+                saved_values = malloc(bindings_count * sizeof(const char *));
+                for (int i = 0; i < bindings_count; i++) {
+                    saved_values[i] = *c->bindings[i].value;
+                }
+            }
+
+            s_fact *found_fact = facts_cursor_next(&l->c);
+
+            // Restore bindings
+            if (bindings_count > 0) {
+                for (int i = 0; i < bindings_count; i++) {
+                    *c->bindings[i].value = saved_values[i];
+                }
+                free(saved_values);
+            }
+
+            if (found_fact) {
+                // Fact exists in db, negation fails. Backtrack.
+                facts_cursor_stop(&l->c);
+                l->spec_init = 0;
+                if (c->level > 0) {
+                    c->level--;
+                } else {
                     c->facts_count = 0;
                     return 0;
                 }
             } else {
-                c->facts_count = 0;
-                return 0;
+                // Fact does not exist, negation succeeds. Advance.
+                c->level++;
+            }
+        } else {
+            // Positive level:
+            l->fact = facts_cursor_next(&l->c);
+            if (l->fact) {
+                c->level++;
+            } else {
+                facts_cursor_stop(&l->c);
+                l->spec_init = 0;
+                if (c->level > 0) {
+                    c->level--;
+                } else {
+                    c->facts_count = 0;
+                    return 0;
+                }
             }
         }
     }
@@ -636,17 +989,240 @@ const char *facts_get_prop(s_facts *facts, const char *s, const char *p)
 long facts_get_prop_long(s_facts *facts, const char *s, const char *p)
 {
     const char *o = facts_get_prop(facts, s, p);
-    return facts_get_long(facts, o);
+    return o ? facts_get_long(facts, o) : 0;
 }
 
 double facts_get_prop_double(s_facts *facts, const char *s, const char *p)
 {
     const char *o = facts_get_prop(facts, s, p);
-    return facts_get_double(facts, o);
+    return o ? facts_get_double(facts, o) : 0.0;
 }
 
 s_fact *facts_set_prop(s_facts *facts, const char *s, const char *p, const char *o)
 {
+    int has_lock = transaction_acquire_writer(&facts->tx);
     facts_remove(facts, (const char *[]){s, p, "?o", NULL, NULL});
-    return facts_add_spo(facts, s, p, o);
+    s_fact *ret = facts_add_spo(facts, s, p, o);
+    transaction_release_writer(&facts->tx, has_lock);
+    return ret;
+}
+
+void facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact)
+{
+    transaction_rollback_push(facts, &facts->tx, action, fact);
+}
+
+int facts_transaction_begin(s_facts *facts)
+{
+    return transaction_begin(facts, &facts->tx);
+}
+
+int facts_transaction_commit(s_facts *facts)
+{
+    return transaction_commit(facts, &facts->tx);
+}
+
+int facts_transaction_rollback(s_facts *facts)
+{
+    return transaction_rollback(facts, &facts->tx);
+}
+
+void facts_register_tx_listener(s_facts *facts, f_facts_tx_listener listener, void *user_data)
+{
+    assert(facts);
+    facts->tx.listener = listener;
+    facts->tx.listener_data = user_data;
+}
+
+s_entity *facts_entity_begin(s_facts *facts, const char *subject)
+{
+    assert(facts);
+    assert(subject);
+    s_entity *ent = malloc(sizeof(s_entity));
+    if (ent) {
+        ent->facts = facts;
+        ent->subject = symbol_to_str(facts_intern(facts, subject));
+        facts_transaction_begin(facts);
+        ent->in_transaction = 1;
+    }
+    return ent;
+}
+
+int facts_entity_add(s_entity *ent, const char *predicate, const char *object)
+{
+    if (!ent || !ent->in_transaction)
+        return -1;
+    facts_add_spo(ent->facts, ent->subject, predicate, object);
+    return 0;
+}
+
+int facts_entity_add_long(s_entity *ent, const char *predicate, long value)
+{
+    if (!ent || !ent->in_transaction)
+        return -1;
+    const char *val_str = facts_long(ent->facts, value);
+    facts_add_spo(ent->facts, ent->subject, predicate, val_str);
+    return 0;
+}
+
+int facts_entity_add_double(s_entity *ent, const char *predicate, double value)
+{
+    if (!ent || !ent->in_transaction)
+        return -1;
+    const char *val_str = facts_double(ent->facts, value);
+    facts_add_spo(ent->facts, ent->subject, predicate, val_str);
+    return 0;
+}
+
+int facts_entity_commit(s_entity *ent)
+{
+    if (!ent)
+        return -1;
+    int res = 0;
+    if (ent->in_transaction) {
+        res = facts_transaction_commit(ent->facts);
+        ent->in_transaction = 0;
+    }
+    free(ent);
+    return res;
+}
+
+void facts_entity_abort(s_entity *ent)
+{
+    if (!ent)
+        return;
+    if (ent->in_transaction) {
+        facts_transaction_rollback(ent->facts);
+        ent->in_transaction = 0;
+    }
+    free(ent);
+}
+
+void facts_spec_sort(s_facts *facts, p_spec spec, size_t count)
+{
+    if (count <= 1)
+        return;
+
+    const char *bound_vars[128];
+    size_t bound_vars_count = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        size_t best_idx = i;
+        double best_cost = -1.0;
+
+        for (size_t j = i; j < count; j++) {
+            s_spec_fact *f = (s_spec_fact *)(spec + j * 4);
+            double cost = 1.0;
+            int has_unbound = 0;
+
+            // Subject
+            if (f->s[0] == '?') {
+                int bound = 0;
+                for (size_t k = 0; k < bound_vars_count; k++) {
+                    if (strcmp(bound_vars[k], f->s) == 0) {
+                        bound = 1;
+                        break;
+                    }
+                }
+                if (!bound)
+                    has_unbound = 1;
+                cost *= bound ? 1.0 : 100000.0;
+            } else {
+                s_set_item *sym = intern_find_symbol(facts->symbols, f->s);
+                cost *= sym ? (double)sym->usage : 0.1;
+            }
+
+            // Predicate
+            if (f->p[0] == '?') {
+                int bound = 0;
+                for (size_t k = 0; k < bound_vars_count; k++) {
+                    if (strcmp(bound_vars[k], f->p) == 0) {
+                        bound = 1;
+                        break;
+                    }
+                }
+                if (!bound)
+                    has_unbound = 1;
+                cost *= bound ? 1.0 : 100000.0;
+            } else {
+                s_set_item *sym = intern_find_symbol(facts->symbols, f->p);
+                cost *= sym ? (double)sym->usage : 0.1;
+            }
+
+            // Object
+            if (f->o[0] == '?') {
+                int bound = 0;
+                for (size_t k = 0; k < bound_vars_count; k++) {
+                    if (strcmp(bound_vars[k], f->o) == 0) {
+                        bound = 1;
+                        break;
+                    }
+                }
+                if (!bound)
+                    has_unbound = 1;
+                cost *= bound ? 1.0 : 100000.0;
+            } else {
+                s_set_item *sym = intern_find_symbol(facts->symbols, f->o);
+                cost *= sym ? (double)sym->usage : 0.1;
+            }
+
+            if (f->negated && strcmp(f->negated, ":not") == 0) {
+                if (has_unbound) {
+                    cost = 1e15;
+                } else {
+                    cost = 1.0;
+                }
+            }
+
+            if (best_cost < 0 || cost < best_cost) {
+                best_cost = cost;
+                best_idx = j;
+            }
+        }
+
+        if (best_idx != i) {
+            s_spec_fact *a = (s_spec_fact *)(spec + i * 4);
+            s_spec_fact *b = (s_spec_fact *)(spec + best_idx * 4);
+            s_spec_fact swap = *a;
+            *a = *b;
+            *b = swap;
+        }
+
+        s_spec_fact *chosen = (s_spec_fact *)(spec + i * 4);
+        if (!(chosen->negated && strcmp(chosen->negated, ":not") == 0)) {
+            if (chosen->s[0] == '?' && bound_vars_count < 128) {
+                int exists = 0;
+                for (size_t k = 0; k < bound_vars_count; k++) {
+                    if (strcmp(bound_vars[k], chosen->s) == 0) {
+                        exists = 1;
+                        break;
+                    }
+                }
+                if (!exists)
+                    bound_vars[bound_vars_count++] = chosen->s;
+            }
+            if (chosen->p[0] == '?' && bound_vars_count < 128) {
+                int exists = 0;
+                for (size_t k = 0; k < bound_vars_count; k++) {
+                    if (strcmp(bound_vars[k], chosen->p) == 0) {
+                        exists = 1;
+                        break;
+                    }
+                }
+                if (!exists)
+                    bound_vars[bound_vars_count++] = chosen->p;
+            }
+            if (chosen->o[0] == '?' && bound_vars_count < 128) {
+                int exists = 0;
+                for (size_t k = 0; k < bound_vars_count; k++) {
+                    if (strcmp(bound_vars[k], chosen->o) == 0) {
+                        exists = 1;
+                        break;
+                    }
+                }
+                if (!exists)
+                    bound_vars[bound_vars_count++] = chosen->o;
+            }
+        }
+    }
 }

@@ -1,46 +1,33 @@
-/*
- *  facts_db - in-memory graph database
- *  Copyright 2020 Thomas de Grivel <thoxdg@gmail.com>
- *
- *  Permission to use, copy, modify, and distribute this software for any
- *  purpose with or without fee is hereby granted, provided that the above
- *  copyright notice and this permission notice appear in all copies.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- *  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- *  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- *  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- *  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- *  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include "fact.h"
+#include "intern.h"
+#include "arena.h"
 
-void fact_init(s_fact *f, const char *s, const char *p, const char *o)
+void fact_init(s_fact *f, Symbol s, Symbol p, Symbol o)
 {
     f->s = s;
     f->p = p;
     f->o = o;
+    f->negated = NULL;
 }
 
-s_fact *new_fact(const char *s, const char *p, const char *o)
+s_fact *new_fact(Symbol s, Symbol p, Symbol o)
 {
-    s_fact *fact = malloc(sizeof(s_fact));
+    s_fact *fact = arena_alloc_fact();
     if (fact) {
         fact->s = s;
         fact->p = p;
         fact->o = o;
+        fact->negated = NULL;
     }
     return fact;
 }
 
 void delete_fact(s_fact *f)
 {
-    free(f);
+    arena_free_fact(f);
 }
 
 int fact_compare_spo(void *a, void *b)
@@ -56,32 +43,11 @@ int fact_compare_spo(void *a, void *b)
         return 1;
     fa = (s_fact *)a;
     fb = (s_fact *)b;
-    if (fa->s == fb->s)
-        cmp = 0;
-    else if (fa->s == P_FIRST || fb->s == P_LAST)
-        cmp = -1;
-    else if (fa->s == P_LAST || fb->s == P_FIRST)
-        cmp = 1;
-    else
-        cmp = strcmp(fa->s, fb->s);
+    cmp = compare_symbol(fa->s, fb->s);
     if (!cmp) {
-        if (fa->p == fb->p)
-            cmp = 0;
-        else if (fa->p == P_FIRST || fb->p == P_LAST)
-            cmp = -1;
-        else if (fa->p == P_LAST || fb->p == P_FIRST)
-            cmp = 1;
-        else
-            cmp = strcmp(fa->p, fb->p);
+        cmp = compare_symbol(fa->p, fb->p);
         if (!cmp) {
-            if (fa->o == fb->o)
-                cmp = 0;
-            else if (fa->o == P_FIRST || fb->o == P_LAST)
-                cmp = -1;
-            else if (fa->o == P_LAST || fb->o == P_FIRST)
-                cmp = 1;
-            else
-                cmp = strcmp(fa->o, fb->o);
+            cmp = compare_symbol(fa->o, fb->o);
         }
     }
     return cmp;
@@ -100,32 +66,11 @@ int fact_compare_pos(void *a, void *b)
         return 1;
     fa = (s_fact *)a;
     fb = (s_fact *)b;
-    if (fa->p == fb->p)
-        cmp = 0;
-    else if (fa->p == P_FIRST || fb->p == P_LAST)
-        cmp = -1;
-    else if (fa->p == P_LAST || fb->p == P_FIRST)
-        cmp = 1;
-    else
-        cmp = strcmp(fa->p, fb->p);
+    cmp = compare_symbol(fa->p, fb->p);
     if (!cmp) {
-        if (fa->o == fb->o)
-            cmp = 0;
-        else if (fa->o == P_FIRST || fb->o == P_LAST)
-            cmp = -1;
-        else if (fa->o == P_LAST || fb->o == P_FIRST)
-            cmp = 1;
-        else
-            cmp = strcmp(fa->o, fb->o);
+        cmp = compare_symbol(fa->o, fb->o);
         if (!cmp) {
-            if (fa->s == fb->s)
-                cmp = 0;
-            else if (fa->s == P_FIRST || fb->s == P_LAST)
-                cmp = -1;
-            else if (fa->s == P_LAST || fb->s == P_FIRST)
-                cmp = 1;
-            else
-                cmp = strcmp(fa->s, fb->s);
+            cmp = compare_symbol(fa->s, fb->s);
         }
     }
     return cmp;
@@ -144,48 +89,14 @@ int fact_compare_osp(void *a, void *b)
         return 1;
     fa = (s_fact *)a;
     fb = (s_fact *)b;
-    if (fa->o == fb->o)
-        cmp = 0;
-    else if (fa->o == P_FIRST || fb->o == P_LAST)
-        cmp = -1;
-    else if (fa->o == P_LAST || fb->o == P_FIRST)
-        cmp = 1;
-    else
-        cmp = strcmp(fa->o, fb->o);
+    cmp = compare_symbol(fa->o, fb->o);
     if (!cmp) {
-        if (fa->s == fb->s)
-            cmp = 0;
-        else if (fa->s == P_FIRST || fb->s == P_LAST)
-            cmp = -1;
-        else if (fa->s == P_LAST || fb->s == P_FIRST)
-            cmp = 1;
-        else
-            cmp = strcmp(fa->s, fb->s);
+        cmp = compare_symbol(fa->s, fb->s);
         if (!cmp) {
-            if (fa->p == fb->p)
-                cmp = 0;
-            else if (fa->p == P_FIRST || fb->p == P_LAST)
-                cmp = -1;
-            else if (fa->p == P_LAST || fb->p == P_FIRST)
-                cmp = 1;
-            else
-                cmp = strcmp(fa->p, fb->p);
+            cmp = compare_symbol(fa->p, fb->p);
         }
     }
     return cmp;
-}
-
-int fact_bindings_resolve(s_fact *f, s_binding *bindings)
-{
-    int resolved = 0;
-    assert(f);
-    if (f->s && f->s[0] == '?')
-        resolved += bindings_resolve(bindings, &f->s);
-    if (f->p && f->p[0] == '?')
-        resolved += bindings_resolve(bindings, &f->p);
-    if (f->o && f->o[0] == '?')
-        resolved += bindings_resolve(bindings, &f->o);
-    return resolved;
 }
 
 s_fact_list *new_fact_list(s_fact *fact, s_fact_list *next)

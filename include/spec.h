@@ -1,19 +1,3 @@
-/*
- *  facts_db - in-memory graph database
- *  Copyright 2020 Thomas de Grivel <thoxdg@gmail.com>
- *
- *  Permission to use, copy, modify, and distribute this software for any
- *  purpose with or without fee is hereby granted, provided that the above
- *  copyright notice and this permission notice appear in all copies.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- *  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- *  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- *  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- *  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- *  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
 #ifndef SPEC_H
 #define SPEC_H
 
@@ -49,6 +33,13 @@ void spec_print(p_spec spec, FILE *fp);
 
 p_spec spec_sort(p_spec spec);
 
+typedef struct spec_fact {
+    const char *s;
+    const char *p;
+    const char *o;
+    const char *negated;
+} s_spec_fact;
+
 typedef struct spec_cursor {
     p_spec spec;
     const char *s;
@@ -57,7 +48,9 @@ typedef struct spec_cursor {
 
 void spec_cursor_init(s_spec_cursor *c, p_spec spec);
 
-int spec_cursor_next(s_spec_cursor *c, s_fact *f);
+int spec_cursor_next(s_spec_cursor *c, s_spec_fact *f);
+
+int spec_fact_bindings_resolve(s_spec_fact *f, s_binding *bindings);
 
 s_binding *spec_bindings(p_spec spec);
 

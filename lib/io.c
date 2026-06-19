@@ -1,26 +1,9 @@
-/*
- *  facts_db - in-memory graph database
- *  Copyright 2020 Thomas de Grivel <thoxdg@gmail.com>
- *
- *  Permission to use, copy, modify, and distribute this software for any
- *  purpose with or without fee is hereby granted, provided that the above
- *  copyright notice and this permission notice appear in all copies.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- *  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- *  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- *  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- *  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- *  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include "rw.h"
+#include "io.h"
 
 int write_string_quoted(const char *string, FILE *fp)
 {
@@ -111,11 +94,11 @@ int write_fact(const s_fact *f, FILE *fp)
 {
     assert(f);
     assert(fp);
-    if (write_string(f->s, fp))
+    if (write_string(symbol_to_str(f->s), fp))
         return -1;
-    if (write_string(f->p, fp))
+    if (write_string(symbol_to_str(f->p), fp))
         return -1;
-    if (write_string(f->o, fp))
+    if (write_string(symbol_to_str(f->o), fp))
         return -1;
     if (write_string("", fp))
         return -1;
@@ -132,47 +115,45 @@ int write_facts(s_facts *facts, FILE *fp)
     assert(facts);
     facts_with_0(facts, &c, &s, &p, &o);
     while ((f = facts_cursor_next(&c))) {
-        if (write_fact(f, fp))
+        if (write_fact(f, fp)) {
+            facts_cursor_stop(&c);
             return -1;
+        }
     }
     fflush(fp);
     return 0;
 }
 
-int read_fact(s_facts *facts, s_fact *f, FILE *fp)
+int read_fact(s_facts *facts, s_fact *f, char *buf, size_t buf_sz, FILE *fp)
 {
-    char *buf;
     assert(facts);
     assert(f);
-    if (!(buf = calloc(FACTS_LOAD_BUFSZ, sizeof(char))))
+    assert(buf);
+    assert(buf_sz > 0);
+    f->negated = NULL;
+    if (read_string(buf, buf_sz, fp))
         return -1;
-    if (read_string(buf, FACTS_LOAD_BUFSZ, fp))
-        goto error;
     if (!buf[0])
-        goto error;
+        return -1;
     if (!(f->s = facts_intern(facts, buf)))
-        goto error;
-    if (read_string(buf, FACTS_LOAD_BUFSZ, fp))
-        goto error;
+        return -1;
+    if (read_string(buf, buf_sz, fp))
+        return -1;
     if (!buf[0])
-        goto error;
+        return -1;
     if (!(f->p = facts_intern(facts, buf)))
-        goto error;
-    if (read_string(buf, FACTS_LOAD_BUFSZ, fp))
-        goto error;
+        return -1;
+    if (read_string(buf, buf_sz, fp))
+        return -1;
     if (!buf[0])
-        goto error;
+        return -1;
     if (!(f->o = facts_intern(facts, buf)))
-        goto error;
+        return -1;
     if (fread(buf, 1, 1, fp) != 1)
-        goto error;
+        return -1;
     if (buf[0] != '\n')
-        goto error;
-    free(buf);
+        return -1;
     return 0;
-error:
-    free(buf);
-    return -1;
 }
 
 static int fpeek(FILE *fp)
@@ -186,13 +167,25 @@ static int fpeek(FILE *fp)
 int read_facts(s_facts *facts, FILE *fp)
 {
     s_fact f;
+    char *buf;
     assert(facts);
+    if (!(buf = calloc(FACTS_LOAD_BUFSZ, sizeof(char))))
+        return -1;
     while (!feof(fp) && fpeek(fp) != EOF) {
-        if (read_fact(facts, &f, fp))
+        if (read_fact(facts, &f, buf, FACTS_LOAD_BUFSZ, fp)) {
+            free(buf);
             return -1;
-        if (!facts_add_fact(facts, &f))
+        }
+        int added = facts_add_fact(facts, &f) != NULL;
+        facts_unintern(facts, f.s);
+        facts_unintern(facts, f.p);
+        facts_unintern(facts, f.o);
+        if (!added) {
+            free(buf);
             return -1;
+        }
     }
+    free(buf);
     return 0;
 }
 
@@ -213,10 +206,23 @@ int read_facts_log(s_facts *facts, FILE *fp)
     char operation[32];
     int op = 0;
     s_fact f;
+    char *buf;
     assert(facts);
+    if (!(buf = calloc(FACTS_LOAD_BUFSZ, sizeof(char))))
+        return -1;
     while (!feof(fp) && fpeek(fp) != EOF) {
-        if (!fgets(operation, sizeof(operation), fp))
+        if (!fgets(operation, sizeof(operation), fp)) {
+            free(buf);
             return -1;
+        }
+        size_t len = strlen(operation);
+        if (len > 0 && operation[len - 1] != '\n') {
+            int c;
+            while ((c = fgetc(fp)) != '\n' && c != EOF) {
+            }
+            free(buf);
+            return -1;
+        }
         if (!strcasecmp(operation, "add\n"))
             op = 1;
         else if (!strcasecmp(operation, "remove\n"))
@@ -226,28 +232,51 @@ int read_facts_log(s_facts *facts, FILE *fp)
                     "facts_load_log:"
                     " unknown operation: %s\n",
                     operation);
+            free(buf);
             return -1;
         }
-        if (read_fact(facts, &f, fp))
+        if (read_fact(facts, &f, buf, FACTS_LOAD_BUFSZ, fp)) {
+            free(buf);
             return -1;
+        }
         if (op == 1) {
-            if (!facts_add_fact(facts, &f))
+            int added = facts_add_fact(facts, &f) != NULL;
+            facts_unintern(facts, f.s);
+            facts_unintern(facts, f.p);
+            facts_unintern(facts, f.o);
+            if (!added) {
+                free(buf);
                 return -1;
+            }
         } else if (op == 2) {
-            if (!facts_remove_fact(facts, &f))
+            int removed = facts_remove_fact(facts, &f);
+            facts_unintern(facts, f.s);
+            facts_unintern(facts, f.p);
+            facts_unintern(facts, f.o);
+            if (!removed) {
+                free(buf);
                 return -1;
+            }
         }
     }
+    free(buf);
     return 0;
 }
 
 int write_spec(p_spec spec, FILE *fp)
 {
     s_spec_cursor c;
-    s_fact f;
+    s_spec_fact f;
     spec_cursor_init(&c, spec);
-    while (spec_cursor_next(&c, &f))
-        if (write_fact(&f, fp))
+    while (spec_cursor_next(&c, &f)) {
+        if (write_string(f.s, fp))
             return -1;
+        if (write_string(f.p, fp))
+            return -1;
+        if (write_string(f.o, fp))
+            return -1;
+        if (write_string("", fp))
+            return -1;
+    }
     return 0;
 }

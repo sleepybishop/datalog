@@ -1,23 +1,29 @@
-/*
- *  facts_db - in-memory graph database
- *  Copyright 2020 Thomas de Grivel <thoxdg@gmail.com>
- *
- *  Permission to use, copy, modify, and distribute this software for any
- *  purpose with or without fee is hereby granted, provided that the above
- *  copyright notice and this permission notice appear in all copies.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- *  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- *  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- *  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- *  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- *  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-
 #include <check.h>
 #include <stdlib.h>
 #include "fact.h"
+#include "intern.h"
+
+static s_intern *test_intern = NULL;
+
+static Symbol ti(const void *s)
+{
+    if (!s || s == (const void *)P_FIRST || s == (const void *)P_LAST)
+        return (Symbol)s;
+    if (!test_intern) {
+        test_intern = new_intern(1000);
+        intern_string(test_intern, "a");
+        intern_string(test_intern, "b");
+        intern_string(test_intern, "c");
+        intern_string(test_intern, "d");
+    }
+    return intern_string(test_intern, (const char *)s);
+}
+
+#undef fact_init
+#define fact_init(f, s, p, o) fact_init(f, ti(s), ti(p), ti(o))
+
+#undef new_fact
+#define new_fact(s, p, o) new_fact(ti(s), ti(p), ti(o))
 
 START_TEST(test_fact_init)
 {
@@ -249,5 +255,8 @@ int main(void)
     srunner_run_all(sr, CK_NORMAL);
     number_failed = srunner_ntests_failed(sr);
     srunner_free(sr);
+    if (test_intern) {
+        delete_intern(test_intern);
+    }
     return (number_failed == 0) ? 0 : 1;
 }

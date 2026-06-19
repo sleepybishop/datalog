@@ -1,26 +1,8 @@
-/*
- *  facts_db - in-memory graph database
- *  Copyright 2020 Thomas de Grivel <thoxdg@gmail.com>
- *
- *  Permission to use, copy, modify, and distribute this software for any
- *  purpose with or without fee is hereby granted, provided that the above
- *  copyright notice and this permission notice appear in all copies.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- *  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- *  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- *  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- *  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- *  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-
 #include <assert.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "spec.h"
 
-/* FIXME: duplicate bindings */
 size_t spec_count_bindings(p_spec spec)
 {
     size_t count = 0;
@@ -38,7 +20,7 @@ size_t spec_count_facts(p_spec spec)
 {
     s_spec_cursor c;
     size_t count = 0;
-    s_fact f;
+    s_spec_fact f;
     spec_cursor_init(&c, spec);
     while (spec_cursor_next(&c, &f))
         count++;
@@ -53,23 +35,24 @@ p_spec spec_expand(p_spec spec)
     count = spec_count_facts(spec);
     if (count > 0) {
         s_spec_cursor c;
-        s_fact f;
-        p_spec new = calloc(count * 4 + 1, sizeof(const char *));
+        s_spec_fact f;
+        p_spec new = calloc(count * 4 + 2, sizeof(const char *));
         p_spec n = new;
         spec_cursor_init(&c, spec);
         while (spec_cursor_next(&c, &f)) {
             *n++ = f.s;
             *n++ = f.p;
             *n++ = f.o;
-            *n++ = NULL;
+            *n++ = f.negated;
         }
+        *n++ = NULL;
         *n = NULL;
         return new;
     }
     return NULL;
 }
 
-int fact_compare_bindings(s_fact *a, s_fact *b)
+int fact_compare_bindings(s_spec_fact *a, s_spec_fact *b)
 {
     int ba = 0;
     int bb = 0;
@@ -105,10 +88,10 @@ p_spec spec_sort(p_spec spec)
         for (i = 0; i < count - 1; i++) {
             size_t j;
             for (j = 0; j < count - i - 1; j++) {
-                s_fact *a = (s_fact *)(spec + j * 4);
-                s_fact *b = (s_fact *)(spec + (j + 1) * 4);
+                s_spec_fact *a = (s_spec_fact *)(spec + j * 4);
+                s_spec_fact *b = (s_spec_fact *)(spec + (j + 1) * 4);
                 if (fact_compare_bindings(a, b) > 0) {
-                    s_fact swap = *a;
+                    s_spec_fact swap = *a;
                     *a = *b;
                     *b = swap;
                 }
@@ -126,7 +109,7 @@ void spec_cursor_init(s_spec_cursor *c, p_spec spec)
     c->pos = 1;
 }
 
-int spec_cursor_next(s_spec_cursor *c, s_fact *f)
+int spec_cursor_next(s_spec_cursor *c, s_spec_fact *f)
 {
     const char *p;
     const char *o;
@@ -134,6 +117,24 @@ int spec_cursor_next(s_spec_cursor *c, s_fact *f)
     assert(f);
     if (!c->s)
         return 0;
+
+    if (strcmp(c->s, ":not") == 0) {
+        const char *s = c->spec[c->pos];
+        const char *p_val = c->spec[c->pos + 1];
+        const char *o_val = c->spec[c->pos + 2];
+        if (!s || !p_val || !o_val || c->spec[c->pos + 3] != NULL) {
+            fprintf(stderr, "spec_cursor_next: invalid :not syntax\n");
+            return 0;
+        }
+        f->s = s;
+        f->p = p_val;
+        f->o = o_val;
+        f->negated = ":not";
+        c->s = c->spec[c->pos + 4];
+        c->pos += 5;
+        return 1;
+    }
+
     p = c->spec[c->pos];
     if (p) {
         o = c->spec[c->pos + 1];
@@ -145,11 +146,25 @@ int spec_cursor_next(s_spec_cursor *c, s_fact *f)
         f->s = c->s;
         f->p = p;
         f->o = o;
+        f->negated = NULL;
         return 1;
     }
     c->s = c->spec[c->pos + 1];
     c->pos += 2;
     return spec_cursor_next(c, f);
+}
+
+int spec_fact_bindings_resolve(s_spec_fact *f, s_binding *bindings)
+{
+    int resolved = 0;
+    assert(f);
+    if (f->s && f->s[0] == '?')
+        resolved += bindings_resolve(bindings, &f->s);
+    if (f->p && f->p[0] == '?')
+        resolved += bindings_resolve(bindings, &f->p);
+    if (f->o && f->o[0] == '?')
+        resolved += bindings_resolve(bindings, &f->o);
+    return resolved;
 }
 
 s_binding *spec_bindings(p_spec spec)

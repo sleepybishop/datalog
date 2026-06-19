@@ -1,26 +1,22 @@
-/*
- *  facts_db - in-memory graph database
- *  Copyright 2020 Thomas de Grivel <thoxdg@gmail.com>
- *
- *  Permission to use, copy, modify, and distribute this software for any
- *  purpose with or without fee is hereby granted, provided that the above
- *  copyright notice and this permission notice appear in all copies.
- *
- *  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- *  WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- *  MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- *  ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- *  WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- *  ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- *  OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-
 #include <check.h>
 #include <stdlib.h>
 #include "facts.h"
-#include "rw.h"
+#include "io.h"
+#include "sparql.h"
 
 s_facts *g_f;
+
+static Symbol ti(const void *s)
+{
+    if (!s || s == (const void *)P_FIRST || s == (const void *)P_LAST)
+        return (Symbol)s;
+    if (g_f && g_f->symbols)
+        return intern_string(g_f->symbols, (const char *)s);
+    return (Symbol)s;
+}
+
+#undef fact_init
+#define fact_init(f, s, p, o) fact_init(f, ti(s), ti(p), ti(o))
 
 START_TEST(test_facts_init_destroy)
 {
@@ -28,6 +24,29 @@ START_TEST(test_facts_init_destroy)
     facts_init(&f, NULL, 100);
     ck_assert(!facts_count(&f));
     facts_destroy(&f);
+}
+END_TEST
+
+START_TEST(test_facts_reset)
+{
+    s_facts *f = new_facts(NULL, 100);
+    ck_assert(f);
+    ck_assert_int_eq(facts_count(f), 0);
+
+    facts_add_spo(f, "alice", "friend", "bob");
+    facts_add_spo(f, "bob", "friend", "charlie");
+    ck_assert_int_eq(facts_count(f), 2);
+    ck_assert(facts_find_symbol(f, "alice") != NULL);
+
+    facts_reset(f);
+    ck_assert_int_eq(facts_count(f), 0);
+    ck_assert(facts_find_symbol(f, "alice") == NULL);
+
+    facts_add_spo(f, "alice", "friend", "bob");
+    ck_assert_int_eq(facts_count(f), 1);
+    ck_assert(facts_find_symbol(f, "alice") != NULL);
+
+    delete_facts(f);
 }
 END_TEST
 
@@ -54,8 +73,9 @@ void teardown_add_fact()
 
 START_TEST(test_facts_add_fact_one)
 {
-    s_fact a = {"a", "b", "c"};
-    s_fact aa = {"a", "b", "c"};
+    s_fact a, aa;
+    fact_init(&a, "a", "b", "c");
+    fact_init(&aa, "a", "b", "c");
     s_fact *ia;
     ck_assert(facts_count(g_f) == 0);
     ck_assert((ia = facts_add_fact(g_f, &a)));
@@ -71,10 +91,11 @@ END_TEST
 
 START_TEST(test_facts_add_fact_two)
 {
-    s_fact a = {"a", "b", "c"};
-    s_fact aa = {"a", "b", "c"};
-    s_fact b = {"b", "c", "d"};
-    s_fact bb = {"b", "c", "d"};
+    s_fact a, aa, b, bb;
+    fact_init(&a, "a", "b", "c");
+    fact_init(&aa, "a", "b", "c");
+    fact_init(&b, "b", "c", "d");
+    fact_init(&bb, "b", "c", "d");
     s_fact *ia;
     s_fact *ib;
     ck_assert(facts_count(g_f) == 0);
@@ -97,16 +118,17 @@ END_TEST
 
 START_TEST(test_facts_add_fact_ten)
 {
-    s_fact a = {"a", "b", "c"};
-    s_fact b = {"b", "c", "d"};
-    s_fact c = {"c", "d", "e"};
-    s_fact d = {"d", "e", "f"};
-    s_fact e = {"e", "f", "g"};
-    s_fact f = {"f", "g", "h"};
-    s_fact g = {"g", "h", "i"};
-    s_fact h = {"h", "i", "j"};
-    s_fact i = {"i", "j", "k"};
-    s_fact j = {"j", "k", "l"};
+    s_fact a, b, c, d, e, f, g, h, i, j;
+    fact_init(&a, "a", "b", "c");
+    fact_init(&b, "b", "c", "d");
+    fact_init(&c, "c", "d", "e");
+    fact_init(&d, "d", "e", "f");
+    fact_init(&e, "e", "f", "g");
+    fact_init(&f, "f", "g", "h");
+    fact_init(&g, "g", "h", "i");
+    fact_init(&h, "h", "i", "j");
+    fact_init(&i, "i", "j", "k");
+    fact_init(&j, "j", "k", "l");
     ck_assert(facts_count(g_f) == 0);
     ck_assert(facts_add_fact(g_f, &a));
     ck_assert(facts_count(g_f) == 1);
@@ -292,9 +314,13 @@ void teardown_remove_fact()
 
 START_TEST(test_facts_remove_fact_one)
 {
-    s_fact a = {"a", "b", "c"};
+    s_fact a;
+    fact_init(&a, "a", "b", "c");
     ck_assert(facts_count(g_f) == 10);
     ck_assert(facts_remove_fact(g_f, &a));
+    facts_unintern(g_f, a.s);
+    facts_unintern(g_f, a.p);
+    facts_unintern(g_f, a.o);
     ck_assert(facts_count(g_f) == 9);
     ck_assert(!facts_remove_fact(g_f, &a));
     ck_assert(facts_count(g_f) == 9);
@@ -306,12 +332,19 @@ END_TEST
 
 START_TEST(test_facts_remove_fact_two)
 {
-    s_fact a = {"a", "b", "c"};
-    s_fact b = {"b", "c", "d"};
+    s_fact a, b;
+    fact_init(&a, "a", "b", "c");
+    fact_init(&b, "b", "c", "d");
     ck_assert(facts_count(g_f) == 10);
     ck_assert(facts_remove_fact(g_f, &a));
+    facts_unintern(g_f, a.s);
+    facts_unintern(g_f, a.p);
+    facts_unintern(g_f, a.o);
     ck_assert(facts_count(g_f) == 9);
     ck_assert(facts_remove_fact(g_f, &b));
+    facts_unintern(g_f, b.s);
+    facts_unintern(g_f, b.p);
+    facts_unintern(g_f, b.o);
     ck_assert(facts_count(g_f) == 8);
     ck_assert(!facts_remove_fact(g_f, &a));
     ck_assert(facts_count(g_f) == 8);
@@ -326,16 +359,17 @@ END_TEST
 
 START_TEST(test_facts_remove_fact_ten)
 {
-    s_fact a = {"a", "b", "c"};
-    s_fact b = {"b", "c", "d"};
-    s_fact c = {"c", "d", "e"};
-    s_fact d = {"d", "e", "f"};
-    s_fact e = {"e", "f", "g"};
-    s_fact f = {"f", "g", "h"};
-    s_fact g = {"g", "h", "i"};
-    s_fact h = {"h", "i", "j"};
-    s_fact i = {"i", "j", "k"};
-    s_fact j = {"j", "k", "l"};
+    s_fact a, b, c, d, e, f, g, h, i, j;
+    fact_init(&a, "a", "b", "c");
+    fact_init(&b, "b", "c", "d");
+    fact_init(&c, "c", "d", "e");
+    fact_init(&d, "d", "e", "f");
+    fact_init(&e, "e", "f", "g");
+    fact_init(&f, "f", "g", "h");
+    fact_init(&g, "g", "h", "i");
+    fact_init(&h, "h", "i", "j");
+    fact_init(&i, "i", "j", "k");
+    fact_init(&j, "j", "k", "l");
     ck_assert(facts_count(g_f) == 10);
     ck_assert(facts_remove_fact(g_f, &a));
     ck_assert(facts_count(g_f) == 9);
@@ -357,6 +391,36 @@ START_TEST(test_facts_remove_fact_ten)
     ck_assert(facts_count(g_f) == 1);
     ck_assert(facts_remove_fact(g_f, &j));
     ck_assert(facts_count(g_f) == 0);
+    facts_unintern(g_f, a.s);
+    facts_unintern(g_f, a.p);
+    facts_unintern(g_f, a.o);
+    facts_unintern(g_f, b.s);
+    facts_unintern(g_f, b.p);
+    facts_unintern(g_f, b.o);
+    facts_unintern(g_f, c.s);
+    facts_unintern(g_f, c.p);
+    facts_unintern(g_f, c.o);
+    facts_unintern(g_f, d.s);
+    facts_unintern(g_f, d.p);
+    facts_unintern(g_f, d.o);
+    facts_unintern(g_f, e.s);
+    facts_unintern(g_f, e.p);
+    facts_unintern(g_f, e.o);
+    facts_unintern(g_f, f.s);
+    facts_unintern(g_f, f.p);
+    facts_unintern(g_f, f.o);
+    facts_unintern(g_f, g.s);
+    facts_unintern(g_f, g.p);
+    facts_unintern(g_f, g.o);
+    facts_unintern(g_f, h.s);
+    facts_unintern(g_f, h.p);
+    facts_unintern(g_f, h.o);
+    facts_unintern(g_f, i.s);
+    facts_unintern(g_f, i.p);
+    facts_unintern(g_f, i.o);
+    facts_unintern(g_f, j.s);
+    facts_unintern(g_f, j.p);
+    facts_unintern(g_f, j.o);
     ck_assert(!facts_find_symbol(g_f, "0"));
     ck_assert(!facts_find_symbol(g_f, "a"));
     ck_assert(!facts_find_symbol(g_f, "b"));
@@ -577,7 +641,7 @@ void teardown_with_spo()
 
 int fact_equal(s_fact *f, const char *s, const char *p, const char *o)
 {
-    return (!strcmp(f->s, s) && !strcmp(f->p, p) && !strcmp(f->o, o));
+    return (!strcmp(symbol_to_str(f->s), s) && !strcmp(symbol_to_str(f->p), p) && !strcmp(symbol_to_str(f->o), o));
 }
 
 START_TEST(test_facts_with_spo_0)
@@ -661,15 +725,15 @@ START_TEST(test_facts_with_spo_s)
     facts_with_spo(g_f, bindings, &c, "?s", "b", "c");
     fact_init(&f, "a", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     fact_init(&f, "g", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "b", "d");
     fact_init(&f, "a", "b", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "b", "e");
     ck_assert(!facts_cursor_next(&c));
@@ -678,7 +742,7 @@ START_TEST(test_facts_with_spo_s)
     facts_with_spo(g_f, bindings, &c, "?s", "i", "c");
     fact_init(&f, "h", "i", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "i", "d");
     ck_assert(!facts_cursor_next(&c));
@@ -701,29 +765,29 @@ START_TEST(test_facts_with_spo_p)
     facts_with_spo(g_f, bindings, &c, "a", "?p", "c");
     fact_init(&f, "a", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "a", "?p", "d");
     fact_init(&f, "a", "b", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     fact_init(&f, "a", "e", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "a", "?p", "e");
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "g", "?p", "c");
     fact_init(&f, "g", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "h", "?p", "b");
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "h", "?p", "c");
     fact_init(&f, "h", "i", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "h", "?p", "d");
     ck_assert(!facts_cursor_next(&c));
@@ -744,17 +808,17 @@ START_TEST(test_facts_with_spo_o)
     facts_with_spo(g_f, bindings, &c, "a", "b", "?o");
     fact_init(&f, "a", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     fact_init(&f, "a", "b", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "a", "c", "?o");
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "a", "e", "?o");
     fact_init(&f, "a", "e", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "a", "f", "?o");
     ck_assert(!facts_cursor_next(&c));
@@ -765,7 +829,7 @@ START_TEST(test_facts_with_spo_o)
     facts_with_spo(g_f, bindings, &c, "g", "b", "?o");
     fact_init(&f, "g", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "g", "c", "?o");
     ck_assert(!facts_cursor_next(&c));
@@ -774,7 +838,7 @@ START_TEST(test_facts_with_spo_o)
     facts_with_spo(g_f, bindings, &c, "h", "i", "?o");
     fact_init(&f, "h", "i", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "i", "j", "?o");
     ck_assert(!facts_cursor_next(&c));
@@ -794,26 +858,26 @@ START_TEST(test_facts_with_spo_sp)
     facts_with_spo(g_f, bindings, &c, "?s", "?p", "c");
     fact_init(&f, "a", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     fact_init(&f, "g", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     fact_init(&f, "h", "i", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "?p", "d");
     fact_init(&f, "a", "b", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     fact_init(&f, "a", "e", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.s, s));
-    ck_assert(!strcmp(f.p, p));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "?p", "e");
     ck_assert(!facts_cursor_next(&c));
@@ -833,30 +897,30 @@ START_TEST(test_facts_with_spo_po)
     facts_with_spo(g_f, bindings, &c, "a", "?p", "?o");
     fact_init(&f, "a", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     fact_init(&f, "a", "b", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     fact_init(&f, "a", "e", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "b", "?p", "?o");
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "g", "?p", "?o");
     fact_init(&f, "g", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "h", "?p", "?o");
     fact_init(&f, "h", "i", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.p, p));
-    ck_assert(!strcmp(f.o, o));
+    ck_assert(!strcmp(symbol_to_str(f.p), p));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "i", "?p", "?o");
     ck_assert(!facts_cursor_next(&c));
@@ -876,32 +940,32 @@ START_TEST(test_facts_with_spo_os)
     facts_with_spo(g_f, bindings, &c, "?s", "b", "?o");
     fact_init(&f, "a", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     fact_init(&f, "g", "b", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     fact_init(&f, "a", "b", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "c", "?o");
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "e", "?o");
     fact_init(&f, "a", "e", "d");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "f", "?o");
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "i", "?o");
     fact_init(&f, "h", "i", "c");
     ck_assert(fact_compare_spo(&f, facts_cursor_next(&c)) == 0);
-    ck_assert(!strcmp(f.o, o));
-    ck_assert(!strcmp(f.s, s));
+    ck_assert(!strcmp(symbol_to_str(f.o), o));
+    ck_assert(!strcmp(symbol_to_str(f.s), s));
     ck_assert(!facts_cursor_next(&c));
     facts_with_spo(g_f, bindings, &c, "?s", "j", "?o");
     ck_assert(!facts_cursor_next(&c));
@@ -1277,6 +1341,20 @@ START_TEST(test_read_facts_log_escapes)
 }
 END_TEST
 
+START_TEST(test_read_facts_log_malformed)
+{
+    FILE *fp = fopen("test_facts_log_malformed", "w");
+    ck_assert(fp);
+    fprintf(fp, "this_is_a_very_long_operation_name_without_newline");
+    fclose(fp);
+    fp = fopen("test_facts_log_malformed", "r");
+    ck_assert(fp);
+    ck_assert(read_facts_log(g_f, fp) == -1);
+    fclose(fp);
+    remove("test_facts_log_malformed");
+}
+END_TEST
+
 void setup_anon()
 {
     g_f = new_facts(NULL, 10);
@@ -1330,35 +1408,52 @@ START_TEST(test_facts_with_empty)
     s_facts *facts = new_facts(NULL, 10);
     s_facts_with_cursor c;
     ck_assert(facts);
-    facts_with(facts, NULL, &c, (const char *[]){NULL, NULL});
+    int rc;
+
+    rc = facts_sparql(facts, NULL, &c, "SELECT ?dummy WHERE { }");
+    ck_assert_int_eq(0, rc);
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
-    facts_with(facts, NULL, &c, (const char *[]){"a", "a", "a", NULL, NULL});
+
+    rc = facts_sparql(facts, NULL, &c, "SELECT ?dummy WHERE { <a> <a> <a> . }");
+    ck_assert_int_eq(0, rc);
     printf("a\n");
     ck_assert(!facts_with_cursor_next(&c));
     printf("b\n");
     facts_with_cursor_destroy(&c);
     printf("c\n");
-    facts_with(facts, NULL, &c, (const char *[]){"a", "a", "a", "b", "c", NULL, NULL});
+
+    rc = facts_sparql(facts, NULL, &c, "SELECT ?dummy WHERE { <a> <a> <a> . <b> <c> <d> . }");
+    ck_assert_int_eq(0, rc);
     printf("d\n");
     ck_assert(!facts_with_cursor_next(&c));
     printf("e\n");
     facts_with_cursor_destroy(&c);
     printf("f\n");
-    facts_with(facts, NULL, &c, (const char *[]){"a", "a", "a", NULL, "a", "b", "c", NULL, NULL});
+
+    rc = facts_sparql(facts, NULL, &c, "SELECT ?dummy WHERE { <a> <a> <a> . <a> <b> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
     delete_facts(facts);
-    facts_with(g_f, NULL, &c, (const char *[]){NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &c, "SELECT ?dummy WHERE { }");
+    ck_assert_int_eq(0, rc);
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
-    facts_with(g_f, NULL, &c, (const char *[]){"a", "a", "a", NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &c, "SELECT ?dummy WHERE { <a> <a> <a> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
-    facts_with(g_f, NULL, &c, (const char *[]){"a", "a", "a", "b", "c", NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &c, "SELECT ?dummy WHERE { <a> <a> <a> . <b> <c> <d> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
-    facts_with(g_f, NULL, &c, (const char *[]){"a", "a", "a", NULL, "a", "b", "c", NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &c, "SELECT ?dummy WHERE { <a> <a> <a> . <a> <b> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
 }
@@ -1367,24 +1462,35 @@ END_TEST
 START_TEST(test_facts_with_zero)
 {
     s_facts_with_cursor cur;
-    facts_with(g_f, NULL, &cur, (const char *[]){"a", "b", "c", NULL, NULL});
+    int rc;
+
+    rc = facts_sparql(g_f, NULL, &cur, "SELECT ?dummy WHERE { <a> <b> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, NULL, &cur, (const char *[]){"a", "b", "c", "b", "d", NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &cur, "SELECT ?dummy WHERE { <a> <b> <c> . <a> <b> <d> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, NULL, &cur, (const char *[]){"a", "e", "d", NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &cur, "SELECT ?dummy WHERE { <a> <e> <d> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, NULL, &cur, (const char *[]){"a", "b", "c", NULL, "g", "b", "c", NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &cur, "SELECT ?dummy WHERE { <a> <b> <c> . <g> <b> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, NULL, &cur,
-               (const char *[]){"a", "b", "c", "b", "d", "e", "d", NULL, "g", "b", "c", NULL, "h", "i", "c", NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &cur,
+                      "SELECT ?dummy WHERE { <a> <b> <c> . <a> <b> <d> . <a> <e> <d> . <g> <b> <c> . <h> <i> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
@@ -1399,19 +1505,26 @@ START_TEST(test_facts_with_one)
     const char *d;
     s_binding bindings[] = {{"?a", &a}, {"?b", &b}, {"?c", &c}, {"?d", &d}, {NULL, NULL}};
     s_facts_with_cursor cur;
-    facts_with(g_f, bindings, &cur, (const char *[]){"?a", "b", "c", NULL, NULL});
+    int rc;
+
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?a WHERE { ?a <b> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(a, "a"));
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(a, "g"));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, bindings, &cur, (const char *[]){"a", "?b", "c", NULL, NULL});
+
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?b WHERE { <a> ?b <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(b, "b"));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, bindings, &cur, (const char *[]){"a", "b", "?c", NULL, NULL});
+
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?c WHERE { <a> <b> ?c . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(c, "c"));
     ck_assert(facts_with_cursor_next(&cur));
@@ -1430,45 +1543,63 @@ START_TEST(test_facts_with_two)
     s_binding bindings[] = {{"?a", &a}, {"?b", &b}, {"?c", &c}, {"?d", &d}, {NULL, NULL}};
     s_facts *facts = new_facts(NULL, 10);
     s_facts_with_cursor cur;
+    int rc;
     ck_assert(facts);
     ck_assert(facts_count(facts) == 0);
     ck_assert(facts_add_spo(facts, "a", "b", "c"));
     ck_assert(facts_count(facts) == 1);
-    facts_with(facts, NULL, &cur, (const char *[]){"a", "b", "c", NULL, NULL});
+
+    rc = facts_sparql(facts, NULL, &cur, "SELECT ?dummy WHERE { <a> <b> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(facts, bindings, &cur, (const char *[]){"?a", "?b", "?c", NULL, NULL});
+
+    rc = facts_sparql(facts, bindings, &cur, "SELECT ?a ?b ?c WHERE { ?a ?b ?c . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(a, "a"));
     ck_assert(!strcmp(b, "b"));
     ck_assert(!strcmp(c, "c"));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(facts, bindings, &cur, (const char *[]){"?a", "b", "c", NULL, NULL});
+
+    rc = facts_sparql(facts, bindings, &cur, "SELECT ?a WHERE { ?a <b> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(a, "a"));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(facts, bindings, &cur, (const char *[]){"a", "?b", "c", NULL, NULL});
+
+    rc = facts_sparql(facts, bindings, &cur, "SELECT ?b WHERE { <a> ?b <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(b, "b"));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(facts, bindings, &cur, (const char *[]){"a", "b", "?c", NULL, NULL});
+
+    rc = facts_sparql(facts, bindings, &cur, "SELECT ?c WHERE { <a> <b> ?c . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(c, "c"));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, NULL, &cur, (const char *[]){"a", "b", "c", NULL, NULL});
+    delete_facts(facts);
+
+    rc = facts_sparql(g_f, NULL, &cur, "SELECT ?dummy WHERE { <a> <b> <c> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, NULL, &cur, (const char *[]){"a", "b", "c", "b", "d", NULL, NULL});
+
+    rc = facts_sparql(g_f, NULL, &cur, "SELECT ?dummy WHERE { <a> <b> <c> . <a> <b> <d> . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, bindings, &cur, (const char *[]){"a", "b", "c", NULL, "g", "?b", "?c", NULL, NULL});
+
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?b ?c WHERE { <a> <b> <c> . <g> ?b ?c . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(b, "b"));
     ck_assert(!strcmp(c, "c"));
@@ -1487,7 +1618,10 @@ START_TEST(test_facts_with_three)
     const char *f;
     s_binding bindings[] = {{"?a", &a}, {"?b", &b}, {"?c", &c}, {"?d", &d}, {"?e", &e}, {"?f", &f}, {NULL, NULL}};
     s_facts_with_cursor cur;
-    facts_with(g_f, bindings, &cur, (const char *[]){"?a", "?b", "?c", NULL, NULL});
+    int rc;
+
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?a ?b ?c WHERE { ?a ?b ?c . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(a, "a"));
     ck_assert(!strcmp(b, "b"));
@@ -1510,7 +1644,9 @@ START_TEST(test_facts_with_three)
     ck_assert(!strcmp(c, "c"));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
-    facts_with(g_f, bindings, &cur, (const char *[]){"?a", "?b", "?c", NULL, "?d", "?e", "?f", NULL, NULL});
+
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?a ?b ?c ?d ?e ?f WHERE { ?a ?b ?c . ?d ?e ?f . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(a, "a"));
     ck_assert(!strcmp(b, "b"));
@@ -1639,12 +1775,188 @@ START_TEST(test_facts_with_bindings)
     const char *d;
     s_binding bindings[] = {{"?a", &a}, {"?b", &b}, {"?c", &c}, {"?d", &d}, {NULL, NULL}};
     s_facts_with_cursor cur;
-    facts_with(g_f, bindings, &cur, (const char *[]){"a", "?b", "?c", NULL, "g", "?b", "?c", NULL, NULL});
+    int rc;
+
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?b ?c WHERE { <a> ?b ?c . <g> ?b ?c . }");
+    ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert(!strcmp(b, "b"));
     ck_assert(!strcmp(c, "c"));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
+}
+END_TEST
+
+START_TEST(test_facts_with_negation)
+{
+    const char *s;
+    s_binding bindings[] = {{"?s", &s}, {NULL, NULL}};
+    s_facts_with_cursor cur;
+    int rc;
+
+    // Query 1: ?s has property (b, c) but NOT property (e, d) -> should be only 'g'
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?s WHERE { ?s <b> <c> . NOT ?s <e> <d> . }");
+    ck_assert_int_eq(0, rc);
+    ck_assert(facts_with_cursor_next(&cur));
+    ck_assert_str_eq("g", s);
+    ck_assert(!facts_with_cursor_next(&cur));
+    facts_with_cursor_destroy(&cur);
+
+    // Query 2: ?s has property (b, c) but NOT property (e, x) -> should return both 'a' and 'g'
+    rc = facts_sparql(g_f, bindings, &cur, "SELECT ?s WHERE { ?s <b> <c> . NOT ?s <e> <x> . }");
+    ck_assert_int_eq(0, rc);
+    ck_assert(facts_with_cursor_next(&cur));
+    ck_assert_str_eq("a", s);
+    ck_assert(facts_with_cursor_next(&cur));
+    ck_assert_str_eq("g", s);
+    ck_assert(!facts_with_cursor_next(&cur));
+    facts_with_cursor_destroy(&cur);
+}
+END_TEST
+
+void setup_prop(void)
+{
+    g_f = new_facts(NULL, 100);
+}
+
+void teardown_prop(void)
+{
+    delete_facts(g_f);
+    g_f = NULL;
+}
+
+START_TEST(test_facts_helpers)
+{
+    // Test long conversion
+    const char *l_str = facts_long(g_f, 123456789L);
+    ck_assert(l_str);
+    ck_assert_int_eq(123456789L, facts_get_long(g_f, l_str));
+
+    // Test double conversion
+    const char *d_str = facts_double(g_f, 3.14159265);
+    ck_assert(d_str);
+    double got_d = facts_get_double(g_f, d_str);
+    ck_assert(got_d > 3.14 && got_d < 3.15);
+}
+END_TEST
+
+START_TEST(test_facts_properties)
+{
+    // Test setting and getting string property
+    ck_assert(facts_set_prop(g_f, "s1", "name", "John"));
+    ck_assert_str_eq("John", facts_get_prop(g_f, "s1", "name"));
+
+    // Test updating string property
+    ck_assert(facts_set_prop(g_f, "s1", "name", "Joe"));
+    ck_assert_str_eq("Joe", facts_get_prop(g_f, "s1", "name"));
+
+    // Test long property
+    const char *age_str = facts_long(g_f, 30);
+    ck_assert(facts_set_prop(g_f, "s1", "age", age_str));
+    ck_assert_int_eq(30, facts_get_prop_long(g_f, "s1", "age"));
+
+    // Test double property
+    const char *pi_str = facts_double(g_f, 3.14159);
+    ck_assert(facts_set_prop(g_f, "s1", "pi", pi_str));
+    double got_pi = facts_get_prop_double(g_f, "s1", "pi");
+    ck_assert(got_pi > 3.14 && got_pi < 3.15);
+
+    // Test getting non-existent property
+    ck_assert(!facts_get_prop(g_f, "s1", "non_existent"));
+    ck_assert_int_eq(0, facts_get_prop_long(g_f, "s1", "non_existent"));
+    ck_assert(facts_get_prop_double(g_f, "s1", "non_existent") == 0.0);
+}
+END_TEST
+
+START_TEST(test_facts_transaction)
+{
+    // 1. Test basic commit:
+    facts_transaction_begin(g_f);
+    ck_assert(facts_add_spo(g_f, "tx", "status", "active"));
+    ck_assert_str_eq("active", facts_get_prop(g_f, "tx", "status"));
+    facts_transaction_commit(g_f);
+    // Verifying it is still there after commit:
+    ck_assert_str_eq("active", facts_get_prop(g_f, "tx", "status"));
+
+    // 2. Test basic rollback:
+    facts_transaction_begin(g_f);
+    ck_assert(facts_set_prop(g_f, "tx", "status", "mutated"));
+    ck_assert_str_eq("mutated", facts_get_prop(g_f, "tx", "status"));
+    facts_transaction_rollback(g_f);
+    // Verifying it rolled back to "active":
+    ck_assert_str_eq("active", facts_get_prop(g_f, "tx", "status"));
+
+    // 3. Test rollback of deletion:
+    facts_transaction_begin(g_f);
+    ck_assert(facts_remove_spo(g_f, "tx", "status", "active"));
+    ck_assert(!facts_get_prop(g_f, "tx", "status"));
+    facts_transaction_rollback(g_f);
+    // Verifying the deletion was rolled back (added back):
+    ck_assert_str_eq("active", facts_get_prop(g_f, "tx", "status"));
+
+    // 4. Test nested transactions:
+    facts_transaction_begin(g_f);
+    ck_assert(facts_add_spo(g_f, "tx", "step", "1"));
+
+    facts_transaction_begin(g_f);
+    ck_assert(facts_add_spo(g_f, "tx", "step", "2"));
+
+    // Commit the inner one:
+    facts_transaction_commit(g_f);
+
+    // Rollback the outer one:
+    facts_transaction_rollback(g_f);
+
+    // Both step 1 and step 2 should be rolled back!
+    ck_assert(!facts_get_prop(g_f, "tx", "step"));
+}
+END_TEST
+
+static int g_listener_called = 0;
+static size_t g_listener_entry_count = 0;
+
+static void my_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
+{
+    (void)facts;
+    (void)entries;
+    int *called = (int *)user_data;
+    *called = 1;
+    g_listener_entry_count = entry_count;
+}
+
+START_TEST(test_facts_tx_listener_and_entity_builder)
+{
+    // Test Transaction Listener:
+    g_listener_called = 0;
+    g_listener_entry_count = 0;
+    facts_register_tx_listener(g_f, my_tx_listener, &g_listener_called);
+
+    facts_transaction_begin(g_f);
+    facts_add_spo(g_f, "tx", "status", "active");
+    facts_transaction_commit(g_f);
+
+    ck_assert_int_eq(g_listener_called, 1);
+    ck_assert_int_eq(g_listener_entry_count, 1);
+
+    // Test Entity Builder:
+    s_entity *ent = facts_entity_begin(g_f, "movie:1");
+    ck_assert(ent);
+    ck_assert_int_eq(facts_entity_add(ent, "title", "Inception"), 0);
+    ck_assert_int_eq(facts_entity_add_long(ent, "year", 2010), 0);
+    ck_assert_int_eq(facts_entity_add_double(ent, "rating", 8.8), 0);
+
+    g_listener_called = 0;
+    g_listener_entry_count = 0;
+    ck_assert_int_eq(facts_entity_commit(ent), 0);
+
+    // Verifying properties are set:
+    ck_assert_str_eq(facts_get_prop(g_f, "movie:1", "title"), "Inception");
+    ck_assert_int_eq(facts_get_prop_long(g_f, "movie:1", "year"), 2010);
+    ck_assert_double_eq_tol(facts_get_prop_double(g_f, "movie:1", "rating"), 8.8, 1e-9);
+
+    // Listener should have been called with 3 entries:
+    ck_assert_int_eq(g_listener_called, 1);
+    ck_assert_int_eq(g_listener_entry_count, 3);
 }
 END_TEST
 
@@ -1665,10 +1977,12 @@ Suite *facts_suite(void)
     TCase *tc_read_log;
     TCase *tc_anon;
     TCase *tc_with;
+    TCase *tc_prop;
     s = suite_create("Facts");
     tc_init = tcase_create("Init");
     tcase_add_test(tc_init, test_facts_init_destroy);
     tcase_add_test(tc_init, test_facts_new_delete);
+    tcase_add_test(tc_init, test_facts_reset);
     suite_add_tcase(s, tc_init);
     tc_add_fact = tcase_create("Add fact");
     tcase_add_checked_fixture(tc_add_fact, setup_add_fact, teardown_add_fact);
@@ -1748,6 +2062,7 @@ Suite *facts_suite(void)
     tcase_add_test(tc_read_log, test_read_facts_log_two);
     tcase_add_test(tc_read_log, test_read_facts_log_ten);
     tcase_add_test(tc_read_log, test_read_facts_log_escapes);
+    tcase_add_test(tc_read_log, test_read_facts_log_malformed);
     suite_add_tcase(s, tc_read_log);
     tc_anon = tcase_create("Anon");
     tcase_add_checked_fixture(tc_anon, setup_anon, teardown_anon);
@@ -1761,7 +2076,15 @@ Suite *facts_suite(void)
     tcase_add_test(tc_with, test_facts_with_two);
     tcase_add_test(tc_with, test_facts_with_three);
     tcase_add_test(tc_with, test_facts_with_bindings);
+    tcase_add_test(tc_with, test_facts_with_negation);
     suite_add_tcase(s, tc_with);
+    tc_prop = tcase_create("Properties");
+    tcase_add_checked_fixture(tc_prop, setup_prop, teardown_prop);
+    tcase_add_test(tc_prop, test_facts_helpers);
+    tcase_add_test(tc_prop, test_facts_properties);
+    tcase_add_test(tc_prop, test_facts_transaction);
+    tcase_add_test(tc_prop, test_facts_tx_listener_and_entity_builder);
+    suite_add_tcase(s, tc_prop);
     return s;
 }
 

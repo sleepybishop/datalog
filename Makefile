@@ -5,9 +5,12 @@ lib/fact.o\
 lib/set.o\
 lib/intern.o\
 lib/arena.o\
-lib/rw.o\
+lib/io.o\
 lib/binding.o\
-lib/skiplist.o\
+lib/hexastore.o\
+lib/lftj.o\
+lib/transaction.o\
+lib/sparql.o\
 lib/facts.o\
 lib/spec.o
 
@@ -18,8 +21,11 @@ t/00util/test/check_fact\
 t/00util/test/check_facts\
 t/00util/test/check_intern\
 t/00util/test/check_set\
-t/00util/test/check_skiplist\
-t/00util/test/check_spec
+t/00util/test/check_spec\
+t/00util/test/check_triejoin\
+t/00util/test/check_movie_integration\
+t/00util/test/check_sparql
+
 
 
 BENCH_UTILS=\
@@ -56,9 +62,14 @@ t/00util/test/check_intern: t/00util/test/check_intern.o $(OBJ)
 
 t/00util/test/check_set: t/00util/test/check_set.o $(OBJ)
 
-t/00util/test/check_skiplist: t/00util/test/check_skiplist.o $(OBJ)
-
 t/00util/test/check_spec: t/00util/test/check_spec.o $(OBJ)
+
+t/00util/test/check_triejoin: t/00util/test/check_triejoin.o $(OBJ)
+
+t/00util/test/check_movie_integration: t/00util/test/check_movie_integration.o $(OBJ)
+
+t/00util/test/check_sparql: t/00util/test/check_sparql.o $(OBJ)
+
 
 check: CFLAGS=-O0 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused
 check: $(TEST_UTILS) $(BENCH_UTILS);
