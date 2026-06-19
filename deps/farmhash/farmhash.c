@@ -113,28 +113,27 @@ static inline uint32_t bswap32(const uint32_t x)
     return y;
 }
 
-/*
-static inline uint64_t bswap64(const uint64_t x) {
-  uint64_t y = x;
+static inline uint64_t bswap64(const uint64_t x)
+{
+    uint64_t y = x;
 
-  for (size_t i = 0; i < sizeof(uint64_t) >> 1; i++) {
+    for (size_t i = 0; i < sizeof(uint64_t) >> 1; i++) {
 
-    uint64_t d = sizeof(uint64_t) - i - 1;
+        uint64_t d = sizeof(uint64_t) - i - 1;
 
-    uint64_t mh = ((uint64_t)0xff) << (d << 3);
-    uint64_t ml = ((uint64_t)0xff) << (i << 3);
+        uint64_t mh = ((uint64_t)0xff) << (d << 3);
+        uint64_t ml = ((uint64_t)0xff) << (i << 3);
 
-    uint64_t h = x & mh;
-    uint64_t l = x & ml;
+        uint64_t h = x & mh;
+        uint64_t l = x & ml;
 
-    uint64_t t = (l << ((d - i) << 3)) | (h >> ((d - i) << 3));
+        uint64_t t = (l << ((d - i) << 3)) | (h >> ((d - i) << 3));
 
-    y = t | (y & ~(mh | ml));
-  }
+        y = t | (y & ~(mh | ml));
+    }
 
-  return y;
+    return y;
 }
-*/
 
 static inline uint64_t fetch64(const char *p)
 {
