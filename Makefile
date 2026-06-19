@@ -40,7 +40,7 @@ CPPFLAGS = -Iinclude -Ideps/rax -D_DEFAULT_SOURCE
 CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC
 LDLIBS = -lm
 
-all: libfacts_db.a
+all: libdatalog.a sparql_repl
 
 t/00util/bench/benchmark_facts_add: t/00util/bench/benchmark_facts_add.o $(OBJ)
 
@@ -75,11 +75,16 @@ check: CFLAGS=-O0 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused
 check: $(TEST_UTILS) $(BENCH_UTILS);
 	prove -I. -v t/*.t
 
-libfacts_db.a: $(OBJ)
+libdatalog.a: $(OBJ)
 	$(AR) rcs $@ $(OBJ) 
 
+sparql_repl: sparql_repl.o deps/linenoise/linenoise.o $(OBJ)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
+
+
 clean:
-	$(RM) *.o *.a *.gperf *.prof t/00util/bench/*.o t/00util/test/*.o $(TEST_UTILS) $(BENCH_UTILS) $(OBJ)
+	$(RM) *.o *.a *.gperf *.prof t/00util/bench/*.o t/00util/test/*.o deps/linenoise/*.o sparql_repl $(TEST_UTILS) $(BENCH_UTILS) $(OBJ)
+
 
 indent:
 	find -name '*.[h,c]' | xargs clang-format -i

@@ -1,4 +1,4 @@
-facts_db - Graph database in C99.
+datalog - Graph database in C99.
 
 Copyright 2020 Thomas de Grivel <thoxdg@gmail.com>
 

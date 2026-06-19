@@ -132,6 +132,7 @@ Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
         i->double_value = 0.0;
 
         int ret = raxInsert(intern->symbols, (unsigned char *)string, len, i, NULL);
+        (void)ret;
         assert(ret == 1);
     } else {
         i = (s_set_item *)res;
@@ -158,6 +159,7 @@ void intern_unstring(s_intern *intern, Symbol sym)
         if (!i->usage) {
             void *old;
             int ret = raxRemove(intern->symbols, (unsigned char *)sym->data, strlen(sym->data), &old);
+            (void)ret;
             assert(ret == 1);
             assert(old == i);
             free(i);

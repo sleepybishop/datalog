@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include "facts.h"
 
-#define ITERATIONS (1000 * 2)
-#define WITH_ITERATIONS (1000)
+#define ITERATIONS (100)
+#define WITH_ITERATIONS (100)
 
 int main(int argc, char **argv)
 {

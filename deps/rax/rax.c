@@ -227,7 +227,7 @@ rax *raxNewWithMetadata(int metaSize, size_t *alloc_size)
 /* realloc the node to have 'newsize'. On out of memory NULL is returned. */
 raxNode *raxNodeRealloc(rax *rax, raxNode *n, size_t newsize)
 {
-    size_t usable, old_usable;
+    size_t usable = 0, old_usable = 0;
     raxNode *newn = rax_realloc_usable(n, newsize, &usable, &old_usable);
     if (newn == NULL)
         return NULL;

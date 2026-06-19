@@ -12,7 +12,7 @@ t/00util/bench/benchmark_set_insert
 t/00util/bench/benchmark_set_insert_overflow
 t/00util/bench/benchmark_set_remove
 t/00util/bench/fixtures/
-libfacts_db.la
+libdatalog.la
 .core
 .gcda
 .gcno
