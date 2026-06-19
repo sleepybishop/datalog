@@ -1,5 +1,5 @@
 OBJ=\
-deps/farmhash/farmhash.o\
+lib/random.o\
 lib/fact.o\
 lib/set.o\
 lib/rw.o\
@@ -7,6 +7,7 @@ lib/binding.o\
 lib/skiplist.o\
 lib/facts.o\
 lib/spec.o
+
 
 TEST_UTILS=\
 t/00util/test/check_fact\
@@ -23,7 +24,7 @@ t/00util/bench/benchmark_set_add_overflow\
 t/00util/bench/benchmark_set_get\
 t/00util/bench/benchmark_set_remove
 
-CPPFLAGS = -Iinclude -Ideps/farmhash -Ideps/checkshim -D_DEFAULT_SOURCE
+CPPFLAGS = -Iinclude -D_DEFAULT_SOURCE
 CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC
 LDLIBS = -lm
 

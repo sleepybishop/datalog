@@ -21,6 +21,7 @@
 #include <string.h>
 #include <strings.h>
 #include "facts.h"
+#include "random.h"
 #include "rw.h"
 
 void facts_init(s_facts *facts, s_set *symbols, unsigned long max)
@@ -170,17 +171,16 @@ void random_id(char *buf, size_t len)
     static const char base64url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                                     "abcdefghijklmnopqrstuvwxyz"
                                     "0123456789-_";
-    int r = rand();
-    int m = RAND_MAX;
+    uint64_t r = xoshiro256_next();
+    size_t bits_left = 64;
     while (len--) {
-        if (m < 64) {
-            r = rand();
-            m = RAND_MAX;
+        if (bits_left < 6) {
+            r = xoshiro256_next();
+            bits_left = 64;
         }
-        *buf = base64url[r % 64];
-        buf++;
-        r /= 64;
-        m /= 64;
+        *buf++ = base64url[r & 63];
+        r >>= 6;
+        bits_left -= 6;
     }
 }
 

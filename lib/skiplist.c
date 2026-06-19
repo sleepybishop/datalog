@@ -18,9 +18,8 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <strings.h>
+#include "random.h"
 #include "skiplist.h"
-
-long int random(void);
 
 void skiplist_node_init(s_skiplist_node *n, void *value, unsigned long height)
 {
@@ -168,7 +167,7 @@ void skiplist_node_insert(s_skiplist_node *n, s_skiplist_node *pred)
 unsigned skiplist_random_height(s_skiplist *sl)
 {
     long max = skiplist_height_table(sl)[sl->max_height - 1];
-    long k = random() % max;
+    long k = xoshiro256_next() % max;
     int i;
     for (i = 0; k > skiplist_height_table(sl)[i]; i++)
         ;
