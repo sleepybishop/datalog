@@ -21,637 +21,636 @@
 
 s_set g_set;
 
-START_TEST (test_set_init_destroy)
+START_TEST(test_set_init_destroy)
 {
-        size_t max = 10;
-        set_init(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        set_destroy(&g_set);
-        max = 100;
-        set_init(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        set_destroy(&g_set);
-        max = 1000;
-        set_init(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        set_destroy(&g_set);
-        max = 10000;
-        set_init(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        set_destroy(&g_set);
-        max = 100000;
-        set_init(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        set_destroy(&g_set);
-        max = 1000000;
-        set_init(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        set_destroy(&g_set);
+    size_t max = 10;
+    set_init(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    set_destroy(&g_set);
+    max = 100;
+    set_init(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    set_destroy(&g_set);
+    max = 1000;
+    set_init(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    set_destroy(&g_set);
+    max = 10000;
+    set_init(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    set_destroy(&g_set);
+    max = 100000;
+    set_init(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    set_destroy(&g_set);
+    max = 1000000;
+    set_init(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    set_destroy(&g_set);
 }
 END_TEST
 
-START_TEST (test_set_new_delete)
+START_TEST(test_set_new_delete)
 {
-        size_t max;
-        s_set *set;
-        max = 10;
-        set = new_set(max);
-        ck_assert(set);
-        ck_assert(set->max == max);
-        ck_assert(set->count == 0);
-        ck_assert(set->collisions == 0);
-        delete_set(set);
-        max = 100;
-        set = new_set(max);
-        ck_assert(set);
-        ck_assert(set->max == max);
-        ck_assert(set->count == 0);
-        ck_assert(set->collisions == 0);
-        delete_set(set);
-        max = 1000;
-        set = new_set(max);
-        ck_assert(set);
-        ck_assert(set->max == max);
-        ck_assert(set->count == 0);
-        ck_assert(set->collisions == 0);
-        delete_set(set);
-        max = 10000;
-        set = new_set(max);
-        ck_assert(set);
-        ck_assert(set->max == max);
-        ck_assert(set->count == 0);
-        ck_assert(set->collisions == 0);
-        delete_set(set);
-        max = 100000;
-        set = new_set(max);
-        ck_assert(set);
-        ck_assert(set->max == max);
-        ck_assert(set->count == 0);
-        ck_assert(set->collisions == 0);
-        delete_set(set);
-        max = 1000000;
-        set = new_set(max);
-        ck_assert(set);
-        ck_assert(set->max == max);
-        ck_assert(set->count == 0);
-        ck_assert(set->collisions == 0);
-        delete_set(set);
+    size_t max;
+    s_set *set;
+    max = 10;
+    set = new_set(max);
+    ck_assert(set);
+    ck_assert(set->max == max);
+    ck_assert(set->count == 0);
+    ck_assert(set->collisions == 0);
+    delete_set(set);
+    max = 100;
+    set = new_set(max);
+    ck_assert(set);
+    ck_assert(set->max == max);
+    ck_assert(set->count == 0);
+    ck_assert(set->collisions == 0);
+    delete_set(set);
+    max = 1000;
+    set = new_set(max);
+    ck_assert(set);
+    ck_assert(set->max == max);
+    ck_assert(set->count == 0);
+    ck_assert(set->collisions == 0);
+    delete_set(set);
+    max = 10000;
+    set = new_set(max);
+    ck_assert(set);
+    ck_assert(set->max == max);
+    ck_assert(set->count == 0);
+    ck_assert(set->collisions == 0);
+    delete_set(set);
+    max = 100000;
+    set = new_set(max);
+    ck_assert(set);
+    ck_assert(set->max == max);
+    ck_assert(set->count == 0);
+    ck_assert(set->collisions == 0);
+    delete_set(set);
+    max = 1000000;
+    set = new_set(max);
+    ck_assert(set);
+    ck_assert(set->max == max);
+    ck_assert(set->count == 0);
+    ck_assert(set->collisions == 0);
+    delete_set(set);
 }
 END_TEST
 
-void setup_add ()
+void setup_add()
 {
-        set_init(&g_set, 10);
+    set_init(&g_set, 10);
 }
 
-void teardown_add ()
+void teardown_add()
 {
-        set_destroy(&g_set);
+    set_destroy(&g_set);
 }
 
-START_TEST (test_set_add_one)
+START_TEST(test_set_add_one)
 {
-        s_set_item *ia;
-        ck_assert(g_set.count == 0);
-        ck_assert((ia = set_add(&g_set, "a", 1)));
-        ck_assert(g_set.count == 1);
-        ck_assert(ia == set_add(&g_set, "a", 1));
-        ck_assert(g_set.count == 1);
-        ck_assert(ia == set_get(&g_set, "a", 1));
-}
-END_TEST
-
-START_TEST (test_set_add_two)
-{
-        s_set_item *ia;
-        s_set_item *ib;
-        ck_assert(g_set.count == 0);
-        ck_assert((ia = set_add(&g_set, "a", 1)));
-        ck_assert(g_set.count == 1);
-        ck_assert((ib = set_add(&g_set, "b", 1)));
-        ck_assert(g_set.count == 2);
-        ck_assert(ia == set_add(&g_set, "a", 1));
-        ck_assert(g_set.count == 2);
-        ck_assert(ib == set_add(&g_set, "b", 1));
-        ck_assert(g_set.count == 2);
-        ck_assert(ia == set_get(&g_set, "a", 1));
-        ck_assert(ib == set_get(&g_set, "b", 1));
+    s_set_item *ia;
+    ck_assert(g_set.count == 0);
+    ck_assert((ia = set_add(&g_set, "a", 1)));
+    ck_assert(g_set.count == 1);
+    ck_assert(ia == set_add(&g_set, "a", 1));
+    ck_assert(g_set.count == 1);
+    ck_assert(ia == set_get(&g_set, "a", 1));
 }
 END_TEST
 
-START_TEST (test_set_add_ten)
+START_TEST(test_set_add_two)
 {
-        s_set_item *ia;
-        s_set_item *ib;
-        s_set_item *ic;
-        s_set_item *id;
-        s_set_item *ie;
-        s_set_item *if_;
-        s_set_item *ig;
-        s_set_item *ih;
-        s_set_item *ii;
-        s_set_item *ij;
-        ck_assert(g_set.count == 0);
-        ck_assert((ia = set_add(&g_set, "a", 1)));
-        ck_assert(g_set.count == 1);
-        ck_assert((ib = set_add(&g_set, "b", 1)));
-        ck_assert(g_set.count == 2);
-        ck_assert((ic = set_add(&g_set, "c", 1)));
-        ck_assert(g_set.count == 3);
-        ck_assert((id = set_add(&g_set, "d", 1)));
-        ck_assert(g_set.count == 4);
-        ck_assert((ie = set_add(&g_set, "e", 1)));
-        ck_assert(g_set.count == 5);
-        ck_assert((if_ = set_add(&g_set, "f", 1)));
-        ck_assert(g_set.count == 6);
-        ck_assert((ig = set_add(&g_set, "g", 1)));
-        ck_assert(g_set.count == 7);
-        ck_assert((ih = set_add(&g_set, "h", 1)));
-        ck_assert(g_set.count == 8);
-        ck_assert((ii = set_add(&g_set, "i", 1)));
-        ck_assert(g_set.count == 9);
-        ck_assert((ij = set_add(&g_set, "j", 1)));
-        ck_assert(g_set.count == 10);
-        ck_assert(!set_get(&g_set, "0", 1));
-        ck_assert(ia == set_get(&g_set, "a", 1));
-        ck_assert(ib == set_get(&g_set, "b", 1));
-        ck_assert(ic == set_get(&g_set, "c", 1));
-        ck_assert(id == set_get(&g_set, "d", 1));
-        ck_assert(ie == set_get(&g_set, "e", 1));
-        ck_assert(if_ == set_get(&g_set, "f", 1));
-        ck_assert(ig == set_get(&g_set, "g", 1));
-        ck_assert(ih == set_get(&g_set, "h", 1));
-        ck_assert(ii == set_get(&g_set, "i", 1));
-        ck_assert(ij == set_get(&g_set, "j", 1));
-        ck_assert(!set_get(&g_set, "k", 1));
-        ck_assert(ia == set_add(&g_set, "a", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(ib == set_add(&g_set, "b", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(ic == set_add(&g_set, "c", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(id == set_add(&g_set, "d", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(ie == set_add(&g_set, "e", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(if_ == set_add(&g_set, "f", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(ig == set_add(&g_set, "g", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(ih == set_add(&g_set, "h", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(ii == set_add(&g_set, "i", 1));
-        ck_assert(g_set.count == 10);
-        ck_assert(ij == set_add(&g_set, "j", 1));
-        ck_assert(g_set.count == 10);
+    s_set_item *ia;
+    s_set_item *ib;
+    ck_assert(g_set.count == 0);
+    ck_assert((ia = set_add(&g_set, "a", 1)));
+    ck_assert(g_set.count == 1);
+    ck_assert((ib = set_add(&g_set, "b", 1)));
+    ck_assert(g_set.count == 2);
+    ck_assert(ia == set_add(&g_set, "a", 1));
+    ck_assert(g_set.count == 2);
+    ck_assert(ib == set_add(&g_set, "b", 1));
+    ck_assert(g_set.count == 2);
+    ck_assert(ia == set_get(&g_set, "a", 1));
+    ck_assert(ib == set_get(&g_set, "b", 1));
 }
 END_TEST
 
-void setup_remove ()
+START_TEST(test_set_add_ten)
 {
-        set_init(&g_set, 8);
-        set_add(&g_set, "a", 1);
-        set_add(&g_set, "b", 1);
-        set_add(&g_set, "c", 1);
-        set_add(&g_set, "d", 1);
-        set_add(&g_set, "e", 1);
-        set_add(&g_set, "f", 1);
-        set_add(&g_set, "g", 1);
-        set_add(&g_set, "h", 1);
-        set_add(&g_set, "i", 1);
-        set_add(&g_set, "j", 1);
-}
-
-void teardown_remove ()
-{
-        set_destroy(&g_set);
-}
-
-START_TEST (test_set_remove_one)
-{
-        ck_assert(g_set.count == 10);
-        ck_assert(set_remove(&g_set, set_get(&g_set, "a", 1)));
-        ck_assert(g_set.count == 9);
-        ck_assert(!set_get(&g_set, "a", 1));
-        ck_assert(set_get(&g_set, "b", 1));
-        ck_assert(set_get(&g_set, "c", 1));
-        ck_assert(set_get(&g_set, "d", 1));
-        ck_assert(set_get(&g_set, "e", 1));
-        ck_assert(set_get(&g_set, "f", 1));
-        ck_assert(set_get(&g_set, "g", 1));
-        ck_assert(set_get(&g_set, "h", 1));
-        ck_assert(set_get(&g_set, "i", 1));
-        ck_assert(set_get(&g_set, "j", 1));
-        ck_assert(!set_get(&g_set, "k", 1));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "a", 1)));
-        ck_assert(g_set.count == 9);
-        ck_assert(!set_get(&g_set, "a", 1));
-        ck_assert(set_get(&g_set, "b", 1));
-        ck_assert(set_get(&g_set, "c", 1));
-        ck_assert(set_get(&g_set, "d", 1));
-        ck_assert(set_get(&g_set, "e", 1));
-        ck_assert(set_get(&g_set, "f", 1));
-        ck_assert(set_get(&g_set, "g", 1));
-        ck_assert(set_get(&g_set, "h", 1));
-        ck_assert(set_get(&g_set, "i", 1));
-        ck_assert(set_get(&g_set, "j", 1));
-        ck_assert(!set_get(&g_set, "k", 1));
-}
-END_TEST
-
-
-START_TEST (test_set_remove_two)
-{
-        ck_assert(g_set.count == 10);
-        ck_assert(set_remove(&g_set, set_get(&g_set, "a", 1)));
-        ck_assert(g_set.count == 9);
-        ck_assert(set_remove(&g_set, set_get(&g_set, "b", 1)));
-        ck_assert(g_set.count == 8);
-        ck_assert(!set_get(&g_set, "a", 1));
-        ck_assert(!set_get(&g_set, "b", 1));
-        ck_assert(set_get(&g_set, "c", 1));
-        ck_assert(set_get(&g_set, "d", 1));
-        ck_assert(set_get(&g_set, "e", 1));
-        ck_assert(set_get(&g_set, "f", 1));
-        ck_assert(set_get(&g_set, "g", 1));
-        ck_assert(set_get(&g_set, "h", 1));
-        ck_assert(set_get(&g_set, "i", 1));
-        ck_assert(set_get(&g_set, "j", 1));
-        ck_assert(!set_get(&g_set, "k", 1));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "a", 1)));
-        ck_assert(g_set.count == 8);
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "b", 1)));
-        ck_assert(g_set.count == 8);
-        ck_assert(!set_get(&g_set, "a", 1));
-        ck_assert(!set_get(&g_set, "b", 1));
-        ck_assert(set_get(&g_set, "c", 1));
-        ck_assert(set_get(&g_set, "d", 1));
-        ck_assert(set_get(&g_set, "e", 1));
-        ck_assert(set_get(&g_set, "f", 1));
-        ck_assert(set_get(&g_set, "g", 1));
-        ck_assert(set_get(&g_set, "h", 1));
-        ck_assert(set_get(&g_set, "i", 1));
-        ck_assert(set_get(&g_set, "j", 1));
-        ck_assert(!set_get(&g_set, "k", 1));
+    s_set_item *ia;
+    s_set_item *ib;
+    s_set_item *ic;
+    s_set_item *id;
+    s_set_item *ie;
+    s_set_item *if_;
+    s_set_item *ig;
+    s_set_item *ih;
+    s_set_item *ii;
+    s_set_item *ij;
+    ck_assert(g_set.count == 0);
+    ck_assert((ia = set_add(&g_set, "a", 1)));
+    ck_assert(g_set.count == 1);
+    ck_assert((ib = set_add(&g_set, "b", 1)));
+    ck_assert(g_set.count == 2);
+    ck_assert((ic = set_add(&g_set, "c", 1)));
+    ck_assert(g_set.count == 3);
+    ck_assert((id = set_add(&g_set, "d", 1)));
+    ck_assert(g_set.count == 4);
+    ck_assert((ie = set_add(&g_set, "e", 1)));
+    ck_assert(g_set.count == 5);
+    ck_assert((if_ = set_add(&g_set, "f", 1)));
+    ck_assert(g_set.count == 6);
+    ck_assert((ig = set_add(&g_set, "g", 1)));
+    ck_assert(g_set.count == 7);
+    ck_assert((ih = set_add(&g_set, "h", 1)));
+    ck_assert(g_set.count == 8);
+    ck_assert((ii = set_add(&g_set, "i", 1)));
+    ck_assert(g_set.count == 9);
+    ck_assert((ij = set_add(&g_set, "j", 1)));
+    ck_assert(g_set.count == 10);
+    ck_assert(!set_get(&g_set, "0", 1));
+    ck_assert(ia == set_get(&g_set, "a", 1));
+    ck_assert(ib == set_get(&g_set, "b", 1));
+    ck_assert(ic == set_get(&g_set, "c", 1));
+    ck_assert(id == set_get(&g_set, "d", 1));
+    ck_assert(ie == set_get(&g_set, "e", 1));
+    ck_assert(if_ == set_get(&g_set, "f", 1));
+    ck_assert(ig == set_get(&g_set, "g", 1));
+    ck_assert(ih == set_get(&g_set, "h", 1));
+    ck_assert(ii == set_get(&g_set, "i", 1));
+    ck_assert(ij == set_get(&g_set, "j", 1));
+    ck_assert(!set_get(&g_set, "k", 1));
+    ck_assert(ia == set_add(&g_set, "a", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(ib == set_add(&g_set, "b", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(ic == set_add(&g_set, "c", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(id == set_add(&g_set, "d", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(ie == set_add(&g_set, "e", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(if_ == set_add(&g_set, "f", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(ig == set_add(&g_set, "g", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(ih == set_add(&g_set, "h", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(ii == set_add(&g_set, "i", 1));
+    ck_assert(g_set.count == 10);
+    ck_assert(ij == set_add(&g_set, "j", 1));
+    ck_assert(g_set.count == 10);
 }
 END_TEST
 
-START_TEST (test_set_remove_ten)
+void setup_remove()
 {
-        ck_assert(g_set.count == 10);
-        ck_assert(set_remove(&g_set, set_get(&g_set, "a", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "b", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "c", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "d", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "e", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "f", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "g", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "h", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "i", 1)));
-        ck_assert(set_remove(&g_set, set_get(&g_set, "j", 1)));
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        ck_assert(!set_get(&g_set, "a", 1));
-        ck_assert(!set_get(&g_set, "b", 1));
-        ck_assert(!set_get(&g_set, "c", 1));
-        ck_assert(!set_get(&g_set, "d", 1));
-        ck_assert(!set_get(&g_set, "e", 1));
-        ck_assert(!set_get(&g_set, "f", 1));
-        ck_assert(!set_get(&g_set, "g", 1));
-        ck_assert(!set_get(&g_set, "h", 1));
-        ck_assert(!set_get(&g_set, "i", 1));
-        ck_assert(!set_get(&g_set, "j", 1));
-        ck_assert(!set_get(&g_set, "k", 1));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "a", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "b", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "c", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "d", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "e", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "f", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "g", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "h", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "i", 1)));
-        ck_assert(!set_remove(&g_set, set_get(&g_set, "j", 1)));
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        ck_assert(!set_get(&g_set, "a", 1));
-        ck_assert(!set_get(&g_set, "b", 1));
-        ck_assert(!set_get(&g_set, "c", 1));
-        ck_assert(!set_get(&g_set, "d", 1));
-        ck_assert(!set_get(&g_set, "e", 1));
-        ck_assert(!set_get(&g_set, "f", 1));
-        ck_assert(!set_get(&g_set, "g", 1));
-        ck_assert(!set_get(&g_set, "h", 1));
-        ck_assert(!set_get(&g_set, "i", 1));
-        ck_assert(!set_get(&g_set, "j", 1));
-        ck_assert(!set_get(&g_set, "k", 1));
+    set_init(&g_set, 8);
+    set_add(&g_set, "a", 1);
+    set_add(&g_set, "b", 1);
+    set_add(&g_set, "c", 1);
+    set_add(&g_set, "d", 1);
+    set_add(&g_set, "e", 1);
+    set_add(&g_set, "f", 1);
+    set_add(&g_set, "g", 1);
+    set_add(&g_set, "h", 1);
+    set_add(&g_set, "i", 1);
+    set_add(&g_set, "j", 1);
+}
+
+void teardown_remove()
+{
+    set_destroy(&g_set);
+}
+
+START_TEST(test_set_remove_one)
+{
+    ck_assert(g_set.count == 10);
+    ck_assert(set_remove(&g_set, set_get(&g_set, "a", 1)));
+    ck_assert(g_set.count == 9);
+    ck_assert(!set_get(&g_set, "a", 1));
+    ck_assert(set_get(&g_set, "b", 1));
+    ck_assert(set_get(&g_set, "c", 1));
+    ck_assert(set_get(&g_set, "d", 1));
+    ck_assert(set_get(&g_set, "e", 1));
+    ck_assert(set_get(&g_set, "f", 1));
+    ck_assert(set_get(&g_set, "g", 1));
+    ck_assert(set_get(&g_set, "h", 1));
+    ck_assert(set_get(&g_set, "i", 1));
+    ck_assert(set_get(&g_set, "j", 1));
+    ck_assert(!set_get(&g_set, "k", 1));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "a", 1)));
+    ck_assert(g_set.count == 9);
+    ck_assert(!set_get(&g_set, "a", 1));
+    ck_assert(set_get(&g_set, "b", 1));
+    ck_assert(set_get(&g_set, "c", 1));
+    ck_assert(set_get(&g_set, "d", 1));
+    ck_assert(set_get(&g_set, "e", 1));
+    ck_assert(set_get(&g_set, "f", 1));
+    ck_assert(set_get(&g_set, "g", 1));
+    ck_assert(set_get(&g_set, "h", 1));
+    ck_assert(set_get(&g_set, "i", 1));
+    ck_assert(set_get(&g_set, "j", 1));
+    ck_assert(!set_get(&g_set, "k", 1));
 }
 END_TEST
 
-START_TEST (test_set_remove_not_in_set)
+START_TEST(test_set_remove_two)
 {
-        s_set_item i;
-        ck_assert(g_set.count == 10);
-        ck_assert(!set_remove(&g_set, &i));
-        ck_assert(g_set.count == 10);
+    ck_assert(g_set.count == 10);
+    ck_assert(set_remove(&g_set, set_get(&g_set, "a", 1)));
+    ck_assert(g_set.count == 9);
+    ck_assert(set_remove(&g_set, set_get(&g_set, "b", 1)));
+    ck_assert(g_set.count == 8);
+    ck_assert(!set_get(&g_set, "a", 1));
+    ck_assert(!set_get(&g_set, "b", 1));
+    ck_assert(set_get(&g_set, "c", 1));
+    ck_assert(set_get(&g_set, "d", 1));
+    ck_assert(set_get(&g_set, "e", 1));
+    ck_assert(set_get(&g_set, "f", 1));
+    ck_assert(set_get(&g_set, "g", 1));
+    ck_assert(set_get(&g_set, "h", 1));
+    ck_assert(set_get(&g_set, "i", 1));
+    ck_assert(set_get(&g_set, "j", 1));
+    ck_assert(!set_get(&g_set, "k", 1));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "a", 1)));
+    ck_assert(g_set.count == 8);
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "b", 1)));
+    ck_assert(g_set.count == 8);
+    ck_assert(!set_get(&g_set, "a", 1));
+    ck_assert(!set_get(&g_set, "b", 1));
+    ck_assert(set_get(&g_set, "c", 1));
+    ck_assert(set_get(&g_set, "d", 1));
+    ck_assert(set_get(&g_set, "e", 1));
+    ck_assert(set_get(&g_set, "f", 1));
+    ck_assert(set_get(&g_set, "g", 1));
+    ck_assert(set_get(&g_set, "h", 1));
+    ck_assert(set_get(&g_set, "i", 1));
+    ck_assert(set_get(&g_set, "j", 1));
+    ck_assert(!set_get(&g_set, "k", 1));
 }
 END_TEST
 
-void setup_resize ()
+START_TEST(test_set_remove_ten)
 {
-        set_init(&g_set, 4);
-}
-
-void teardown_resize ()
-{
-        set_destroy(&g_set);
-}
-
-START_TEST (test_set_resize_empty)
-{
-        size_t max;
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        max = 10;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        max = 100;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        max = 1000;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        max = 100;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        max = 10;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-        max = 10;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 0);
-        ck_assert(g_set.collisions == 0);
-}
-END_TEST
-
-START_TEST (test_set_resize_one)
-{
-        s_set_item *ib;
-        size_t max;
-        ck_assert(g_set.count == 0);
-        ck_assert(set_add(&g_set, "a", 1));
-        ck_assert(g_set.count == 1);
-        max = 10;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 1);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert((ib = set_add(&g_set, "b", 1)));
-        ck_assert(g_set.count == 2);
-        ck_assert(ib == set_get(&g_set, "b", 1));
-        ck_assert(set_remove(&g_set, ib));
-        ck_assert(g_set.count == 1);
-        max = 100;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 1);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert((ib = set_add(&g_set, "b", 1)));
-        ck_assert(g_set.count == 2);
-        ck_assert(ib == set_get(&g_set, "b", 1));
-        ck_assert(set_remove(&g_set, ib));
-        ck_assert(g_set.count == 1);
-        max = 1000;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 1);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert((ib = set_add(&g_set, "b", 1)));
-        ck_assert(g_set.count == 2);
-        ck_assert(ib == set_get(&g_set, "b", 1));
-        ck_assert(set_remove(&g_set, ib));
-        ck_assert(g_set.count == 1);
-        max = 100;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 1);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert((ib = set_add(&g_set, "b", 1)));
-        ck_assert(g_set.count == 2);
-        ck_assert(ib == set_get(&g_set, "b", 1));
-        ck_assert(set_remove(&g_set, ib));
-        ck_assert(g_set.count == 1);
-        max = 10;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 1);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert((ib = set_add(&g_set, "b", 1)));
-        ck_assert(g_set.count == 2);
-        ck_assert(ib == set_get(&g_set, "b", 1));
-        ck_assert(set_remove(&g_set, ib));
-        ck_assert(g_set.count == 1);
+    ck_assert(g_set.count == 10);
+    ck_assert(set_remove(&g_set, set_get(&g_set, "a", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "b", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "c", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "d", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "e", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "f", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "g", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "h", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "i", 1)));
+    ck_assert(set_remove(&g_set, set_get(&g_set, "j", 1)));
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    ck_assert(!set_get(&g_set, "a", 1));
+    ck_assert(!set_get(&g_set, "b", 1));
+    ck_assert(!set_get(&g_set, "c", 1));
+    ck_assert(!set_get(&g_set, "d", 1));
+    ck_assert(!set_get(&g_set, "e", 1));
+    ck_assert(!set_get(&g_set, "f", 1));
+    ck_assert(!set_get(&g_set, "g", 1));
+    ck_assert(!set_get(&g_set, "h", 1));
+    ck_assert(!set_get(&g_set, "i", 1));
+    ck_assert(!set_get(&g_set, "j", 1));
+    ck_assert(!set_get(&g_set, "k", 1));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "a", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "b", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "c", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "d", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "e", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "f", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "g", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "h", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "i", 1)));
+    ck_assert(!set_remove(&g_set, set_get(&g_set, "j", 1)));
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    ck_assert(!set_get(&g_set, "a", 1));
+    ck_assert(!set_get(&g_set, "b", 1));
+    ck_assert(!set_get(&g_set, "c", 1));
+    ck_assert(!set_get(&g_set, "d", 1));
+    ck_assert(!set_get(&g_set, "e", 1));
+    ck_assert(!set_get(&g_set, "f", 1));
+    ck_assert(!set_get(&g_set, "g", 1));
+    ck_assert(!set_get(&g_set, "h", 1));
+    ck_assert(!set_get(&g_set, "i", 1));
+    ck_assert(!set_get(&g_set, "j", 1));
+    ck_assert(!set_get(&g_set, "k", 1));
 }
 END_TEST
 
-START_TEST (test_set_resize_two)
+START_TEST(test_set_remove_not_in_set)
 {
-        s_set_item *ic;
-        size_t max;
-        ck_assert(g_set.count == 0);
-        ck_assert(set_add(&g_set, "a", 1));
-        ck_assert(g_set.count == 1);
-        ck_assert(set_add(&g_set, "b", 1));
-        ck_assert(g_set.count == 2);
-        max = 10;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 2);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert(set_get(&g_set, "b", 1));
-        ck_assert((ic = set_add(&g_set, "c", 1)));
-        ck_assert(g_set.count == 3);
-        ck_assert(ic == set_get(&g_set, "c", 1));
-        ck_assert(set_remove(&g_set, ic));
-        ck_assert(g_set.count == 2);
-        max = 100;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 2);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert(set_get(&g_set, "b", 1));
-        ck_assert((ic = set_add(&g_set, "c", 1)));
-        ck_assert(g_set.count == 3);
-        ck_assert(ic == set_get(&g_set, "c", 1));
-        ck_assert(set_remove(&g_set, ic));
-        ck_assert(g_set.count == 2);
-        max = 1000;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 2);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert(set_get(&g_set, "b", 1));
-        ck_assert((ic = set_add(&g_set, "c", 1)));
-        ck_assert(g_set.count == 3);
-        ck_assert(ic == set_get(&g_set, "c", 1));
-        ck_assert(set_remove(&g_set, ic));
-        ck_assert(g_set.count == 2);
-        max = 100;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 2);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert(set_get(&g_set, "b", 1));
-        ck_assert((ic = set_add(&g_set, "c", 1)));
-        ck_assert(g_set.count == 3);
-        ck_assert(ic == set_get(&g_set, "c", 1));
-        ck_assert(set_remove(&g_set, ic));
-        ck_assert(g_set.count == 2);
-        max = 10;
-        set_resize(&g_set, max);
-        ck_assert(g_set.max == max);
-        ck_assert(g_set.count == 2);
-        ck_assert(set_get(&g_set, "a", 1));
-        ck_assert(set_get(&g_set, "b", 1));
-        ck_assert((ic = set_add(&g_set, "c", 1)));
-        ck_assert(g_set.count == 3);
-        ck_assert(ic == set_get(&g_set, "c", 1));
-        ck_assert(set_remove(&g_set, ic));
-        ck_assert(g_set.count == 2);
+    s_set_item i;
+    ck_assert(g_set.count == 10);
+    ck_assert(!set_remove(&g_set, &i));
+    ck_assert(g_set.count == 10);
 }
 END_TEST
 
-void setup_cursor ()
+void setup_resize()
 {
-        set_init(&g_set, 6);
+    set_init(&g_set, 4);
 }
 
-void teardown_cursor ()
+void teardown_resize()
 {
-        set_destroy(&g_set);
+    set_destroy(&g_set);
 }
 
-START_TEST (test_set_cursor_empty)
+START_TEST(test_set_resize_empty)
 {
-        s_set_cursor c;
-        ck_assert(g_set.count == 0);
-        set_cursor_init(&g_set, &c);
-        ck_assert(c.count == 0);
-        ck_assert(!set_cursor_next(&c));
-        ck_assert(!set_cursor_next(&c));
-}
-END_TEST
-
-START_TEST (test_set_cursor_one)
-{
-        s_set_cursor c;
-        s_set_item *ia;
-        ck_assert(g_set.count == 0);
-        ck_assert((ia = set_add(&g_set, "a", 1)));
-        ck_assert(g_set.count == 1);
-        set_cursor_init(&g_set, &c);
-        ck_assert(c.count == 0);
-        ck_assert(ia == set_cursor_next(&c));
-        ck_assert(c.count == 1);
-        ck_assert(!set_cursor_next(&c));
-        ck_assert(!set_cursor_next(&c));
-}
-END_TEST
-
-START_TEST (test_set_cursor_two)
-{
-        s_set_cursor c;
-        ck_assert(g_set.count == 0);
-        ck_assert(set_add(&g_set, "a", 1));
-        ck_assert(g_set.count == 1);
-        ck_assert(set_add(&g_set, "b", 1));
-        ck_assert(g_set.count == 2);
-        set_cursor_init(&g_set, &c);
-        ck_assert(c.count == 0);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 1);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 2);
-        ck_assert(!set_cursor_next(&c));
-        ck_assert(!set_cursor_next(&c));
+    size_t max;
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    max = 10;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    max = 100;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    max = 1000;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    max = 100;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    max = 10;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
+    max = 10;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 0);
+    ck_assert(g_set.collisions == 0);
 }
 END_TEST
 
-START_TEST (test_set_cursor_ten)
+START_TEST(test_set_resize_one)
 {
-        s_set_cursor c;
-        ck_assert(g_set.count == 0);
-        ck_assert(set_add(&g_set, "a", 1));
-        ck_assert(g_set.count == 1);
-        ck_assert(set_add(&g_set, "b", 1));
-        ck_assert(g_set.count == 2);
-        ck_assert(set_add(&g_set, "c", 1));
-        ck_assert(g_set.count == 3);
-        ck_assert(set_add(&g_set, "d", 1));
-        ck_assert(g_set.count == 4);
-        ck_assert(set_add(&g_set, "e", 1));
-        ck_assert(g_set.count == 5);
-        ck_assert(set_add(&g_set, "f", 1));
-        ck_assert(g_set.count == 6);
-        ck_assert(set_add(&g_set, "g", 1));
-        ck_assert(g_set.count == 7);
-        ck_assert(set_add(&g_set, "h", 1));
-        ck_assert(g_set.count == 8);
-        ck_assert(set_add(&g_set, "i", 1));
-        ck_assert(g_set.count == 9);
-        ck_assert(set_add(&g_set, "j", 1));
-        ck_assert(g_set.count == 10);
-        set_cursor_init(&g_set, &c);
-        ck_assert(c.count == 0);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 1);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 2);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 3);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 4);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 5);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 6);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 7);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 8);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 9);
-        ck_assert(set_cursor_next(&c));
-        ck_assert(c.count == 10);
-        ck_assert(!set_cursor_next(&c));
-        ck_assert(!set_cursor_next(&c));
+    s_set_item *ib;
+    size_t max;
+    ck_assert(g_set.count == 0);
+    ck_assert(set_add(&g_set, "a", 1));
+    ck_assert(g_set.count == 1);
+    max = 10;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 1);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert((ib = set_add(&g_set, "b", 1)));
+    ck_assert(g_set.count == 2);
+    ck_assert(ib == set_get(&g_set, "b", 1));
+    ck_assert(set_remove(&g_set, ib));
+    ck_assert(g_set.count == 1);
+    max = 100;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 1);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert((ib = set_add(&g_set, "b", 1)));
+    ck_assert(g_set.count == 2);
+    ck_assert(ib == set_get(&g_set, "b", 1));
+    ck_assert(set_remove(&g_set, ib));
+    ck_assert(g_set.count == 1);
+    max = 1000;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 1);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert((ib = set_add(&g_set, "b", 1)));
+    ck_assert(g_set.count == 2);
+    ck_assert(ib == set_get(&g_set, "b", 1));
+    ck_assert(set_remove(&g_set, ib));
+    ck_assert(g_set.count == 1);
+    max = 100;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 1);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert((ib = set_add(&g_set, "b", 1)));
+    ck_assert(g_set.count == 2);
+    ck_assert(ib == set_get(&g_set, "b", 1));
+    ck_assert(set_remove(&g_set, ib));
+    ck_assert(g_set.count == 1);
+    max = 10;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 1);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert((ib = set_add(&g_set, "b", 1)));
+    ck_assert(g_set.count == 2);
+    ck_assert(ib == set_get(&g_set, "b", 1));
+    ck_assert(set_remove(&g_set, ib));
+    ck_assert(g_set.count == 1);
 }
 END_TEST
 
-Suite * set_suite(void)
+START_TEST(test_set_resize_two)
+{
+    s_set_item *ic;
+    size_t max;
+    ck_assert(g_set.count == 0);
+    ck_assert(set_add(&g_set, "a", 1));
+    ck_assert(g_set.count == 1);
+    ck_assert(set_add(&g_set, "b", 1));
+    ck_assert(g_set.count == 2);
+    max = 10;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 2);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert(set_get(&g_set, "b", 1));
+    ck_assert((ic = set_add(&g_set, "c", 1)));
+    ck_assert(g_set.count == 3);
+    ck_assert(ic == set_get(&g_set, "c", 1));
+    ck_assert(set_remove(&g_set, ic));
+    ck_assert(g_set.count == 2);
+    max = 100;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 2);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert(set_get(&g_set, "b", 1));
+    ck_assert((ic = set_add(&g_set, "c", 1)));
+    ck_assert(g_set.count == 3);
+    ck_assert(ic == set_get(&g_set, "c", 1));
+    ck_assert(set_remove(&g_set, ic));
+    ck_assert(g_set.count == 2);
+    max = 1000;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 2);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert(set_get(&g_set, "b", 1));
+    ck_assert((ic = set_add(&g_set, "c", 1)));
+    ck_assert(g_set.count == 3);
+    ck_assert(ic == set_get(&g_set, "c", 1));
+    ck_assert(set_remove(&g_set, ic));
+    ck_assert(g_set.count == 2);
+    max = 100;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 2);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert(set_get(&g_set, "b", 1));
+    ck_assert((ic = set_add(&g_set, "c", 1)));
+    ck_assert(g_set.count == 3);
+    ck_assert(ic == set_get(&g_set, "c", 1));
+    ck_assert(set_remove(&g_set, ic));
+    ck_assert(g_set.count == 2);
+    max = 10;
+    set_resize(&g_set, max);
+    ck_assert(g_set.max == max);
+    ck_assert(g_set.count == 2);
+    ck_assert(set_get(&g_set, "a", 1));
+    ck_assert(set_get(&g_set, "b", 1));
+    ck_assert((ic = set_add(&g_set, "c", 1)));
+    ck_assert(g_set.count == 3);
+    ck_assert(ic == set_get(&g_set, "c", 1));
+    ck_assert(set_remove(&g_set, ic));
+    ck_assert(g_set.count == 2);
+}
+END_TEST
+
+void setup_cursor()
+{
+    set_init(&g_set, 6);
+}
+
+void teardown_cursor()
+{
+    set_destroy(&g_set);
+}
+
+START_TEST(test_set_cursor_empty)
+{
+    s_set_cursor c;
+    ck_assert(g_set.count == 0);
+    set_cursor_init(&g_set, &c);
+    ck_assert(c.count == 0);
+    ck_assert(!set_cursor_next(&c));
+    ck_assert(!set_cursor_next(&c));
+}
+END_TEST
+
+START_TEST(test_set_cursor_one)
+{
+    s_set_cursor c;
+    s_set_item *ia;
+    ck_assert(g_set.count == 0);
+    ck_assert((ia = set_add(&g_set, "a", 1)));
+    ck_assert(g_set.count == 1);
+    set_cursor_init(&g_set, &c);
+    ck_assert(c.count == 0);
+    ck_assert(ia == set_cursor_next(&c));
+    ck_assert(c.count == 1);
+    ck_assert(!set_cursor_next(&c));
+    ck_assert(!set_cursor_next(&c));
+}
+END_TEST
+
+START_TEST(test_set_cursor_two)
+{
+    s_set_cursor c;
+    ck_assert(g_set.count == 0);
+    ck_assert(set_add(&g_set, "a", 1));
+    ck_assert(g_set.count == 1);
+    ck_assert(set_add(&g_set, "b", 1));
+    ck_assert(g_set.count == 2);
+    set_cursor_init(&g_set, &c);
+    ck_assert(c.count == 0);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 1);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 2);
+    ck_assert(!set_cursor_next(&c));
+    ck_assert(!set_cursor_next(&c));
+}
+END_TEST
+
+START_TEST(test_set_cursor_ten)
+{
+    s_set_cursor c;
+    ck_assert(g_set.count == 0);
+    ck_assert(set_add(&g_set, "a", 1));
+    ck_assert(g_set.count == 1);
+    ck_assert(set_add(&g_set, "b", 1));
+    ck_assert(g_set.count == 2);
+    ck_assert(set_add(&g_set, "c", 1));
+    ck_assert(g_set.count == 3);
+    ck_assert(set_add(&g_set, "d", 1));
+    ck_assert(g_set.count == 4);
+    ck_assert(set_add(&g_set, "e", 1));
+    ck_assert(g_set.count == 5);
+    ck_assert(set_add(&g_set, "f", 1));
+    ck_assert(g_set.count == 6);
+    ck_assert(set_add(&g_set, "g", 1));
+    ck_assert(g_set.count == 7);
+    ck_assert(set_add(&g_set, "h", 1));
+    ck_assert(g_set.count == 8);
+    ck_assert(set_add(&g_set, "i", 1));
+    ck_assert(g_set.count == 9);
+    ck_assert(set_add(&g_set, "j", 1));
+    ck_assert(g_set.count == 10);
+    set_cursor_init(&g_set, &c);
+    ck_assert(c.count == 0);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 1);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 2);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 3);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 4);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 5);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 6);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 7);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 8);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 9);
+    ck_assert(set_cursor_next(&c));
+    ck_assert(c.count == 10);
+    ck_assert(!set_cursor_next(&c));
+    ck_assert(!set_cursor_next(&c));
+}
+END_TEST
+
+Suite *set_suite(void)
 {
     Suite *s;
     TCase *tc_init;

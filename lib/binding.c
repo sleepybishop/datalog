@@ -21,48 +21,46 @@
 #include <string.h>
 #include "binding.h"
 
-const char ** bindings_get (s_binding *bindings, const char *name)
+const char **bindings_get(s_binding *bindings, const char *name)
 {
-        if (bindings)
-                while (bindings->name) {
-                        if (strcmp(bindings->name, name) == 0)
-                                return bindings->value;
-                        bindings++;
-                }
-        return NULL;
+    if (bindings)
+        while (bindings->name) {
+            if (strcmp(bindings->name, name) == 0)
+                return bindings->value;
+            bindings++;
+        }
+    return NULL;
 }
 
-const char ** bindings_get_or_die (s_binding *bindings,
-                                   const char *name)
+const char **bindings_get_or_die(s_binding *bindings, const char *name)
 {
-        const char **b = bindings_get(bindings, name);
-        if (!b) {
-                fprintf(stderr, "bindings_get: unknown binding: %s\n",
-                        name);
-                exit(1);
-        }
-        return b;
+    const char **b = bindings_get(bindings, name);
+    if (!b) {
+        fprintf(stderr, "bindings_get: unknown binding: %s\n", name);
+        exit(1);
+    }
+    return b;
 }
 
 /* set all bindings values to NULL */
 
-void bindings_nullify (s_binding *bindings)
+void bindings_nullify(s_binding *bindings)
 {
-        if (bindings)
-                while (bindings->name) {
-                        *bindings->value = NULL;
-                        bindings++;
-                }
+    if (bindings)
+        while (bindings->name) {
+            *bindings->value = NULL;
+            bindings++;
+        }
 }
 
-int bindings_resolve (s_binding *bindings, const char **pstr)
+int bindings_resolve(s_binding *bindings, const char **pstr)
 {
-        if (bindings && pstr && (*pstr)[0] == '?') {
-                const char **value = bindings_get(bindings, *pstr);
-                if (value) {
-                        *pstr = *value;
-                        return 1;
-                }
+    if (bindings && pstr && (*pstr)[0] == '?') {
+        const char **value = bindings_get(bindings, *pstr);
+        if (value) {
+            *pstr = *value;
+            return 1;
         }
-        return 0;
+    }
+    return 0;
 }

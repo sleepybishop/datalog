@@ -36,32 +36,29 @@ typedef const char **p_spec;
 */
 
 /* calls malloc */
-p_spec spec_clone (p_spec spec);
+p_spec spec_clone(p_spec spec);
 
-size_t spec_count_bindings (p_spec spec);
+size_t spec_count_bindings(p_spec spec);
 
-size_t spec_count_facts (p_spec spec);
+size_t spec_count_facts(p_spec spec);
 
 /* calls malloc to return a new p_spec */
-p_spec spec_expand (p_spec spec);
+p_spec spec_expand(p_spec spec);
 
-void   spec_print (p_spec spec,
-                   FILE *fp);
+void spec_print(p_spec spec, FILE *fp);
 
-p_spec spec_sort (p_spec spec);
+p_spec spec_sort(p_spec spec);
 
 typedef struct spec_cursor {
-        p_spec spec;
-        const char *s;
-        unsigned long pos;
+    p_spec spec;
+    const char *s;
+    unsigned long pos;
 } s_spec_cursor;
 
-void spec_cursor_init (s_spec_cursor *c,
-                       p_spec spec);
+void spec_cursor_init(s_spec_cursor *c, p_spec spec);
 
-int  spec_cursor_next (s_spec_cursor *c,
-                       s_fact *f);
+int spec_cursor_next(s_spec_cursor *c, s_fact *f);
 
-s_binding * spec_bindings (p_spec spec);
+s_binding *spec_bindings(p_spec spec);
 
 #endif

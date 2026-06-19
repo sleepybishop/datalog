@@ -21,164 +21,163 @@
 #include "spec.h"
 
 /* FIXME: duplicate bindings */
-size_t spec_count_bindings (p_spec spec)
+size_t spec_count_bindings(p_spec spec)
 {
-        size_t count = 0;
-        size_t i = 0;
-        if (spec && spec[0])
-                while (spec[i] || spec[i + 1]) {
-                        if (spec[i] && spec[i][0] == '?')
-                                count++;
-                        i++;
-                }
-        return count;
+    size_t count = 0;
+    size_t i = 0;
+    if (spec && spec[0])
+        while (spec[i] || spec[i + 1]) {
+            if (spec[i] && spec[i][0] == '?')
+                count++;
+            i++;
+        }
+    return count;
 }
 
-size_t spec_count_facts (p_spec spec)
+size_t spec_count_facts(p_spec spec)
 {
-        s_spec_cursor c;
-        size_t count = 0;
-        s_fact f;
-        spec_cursor_init(&c, spec);
-        while (spec_cursor_next(&c, &f))
-                count++;
-        return count;
+    s_spec_cursor c;
+    size_t count = 0;
+    s_fact f;
+    spec_cursor_init(&c, spec);
+    while (spec_cursor_next(&c, &f))
+        count++;
+    return count;
 }
 
 /* calls malloc to return a new p_spec */
-p_spec spec_expand (p_spec spec)
+p_spec spec_expand(p_spec spec)
 {
-        size_t count;
-        assert(spec);
-        count = spec_count_facts(spec);
-        if (count > 0) {
-                s_spec_cursor c;
-                s_fact f;
-                p_spec new = calloc(count * 4 + 1,
-                                    sizeof(const char *));
-                p_spec n = new;
-                spec_cursor_init(&c, spec);
-                while (spec_cursor_next(&c, &f)) {
-                        *n++ = f.s;
-                        *n++ = f.p;
-                        *n++ = f.o;
-                        *n++ = NULL;
-                }
-                *n = NULL;
-                return new;
+    size_t count;
+    assert(spec);
+    count = spec_count_facts(spec);
+    if (count > 0) {
+        s_spec_cursor c;
+        s_fact f;
+        p_spec new = calloc(count * 4 + 1, sizeof(const char *));
+        p_spec n = new;
+        spec_cursor_init(&c, spec);
+        while (spec_cursor_next(&c, &f)) {
+            *n++ = f.s;
+            *n++ = f.p;
+            *n++ = f.o;
+            *n++ = NULL;
         }
-        return NULL;
+        *n = NULL;
+        return new;
+    }
+    return NULL;
 }
 
-int fact_compare_bindings (s_fact *a, s_fact *b)
+int fact_compare_bindings(s_fact *a, s_fact *b)
 {
-        int ba = 0;
-        int bb = 0;
-        assert(a);
-        assert(b);
-        if (a->s[0] == '?')
-                ba++;
-        if (a->p[0] == '?')
-                ba++;
-        if (a->o[0] == '?')
-                ba++;
-        if (b->s[0] == '?')
-                bb++;
-        if (b->p[0] == '?')
-                bb++;
-        if (b->o[0] == '?')
-                bb++;
-        if (ba < bb)
-                return -1;
-        if (ba > bb)
-                return 1;
-        return 0;
+    int ba = 0;
+    int bb = 0;
+    assert(a);
+    assert(b);
+    if (a->s[0] == '?')
+        ba++;
+    if (a->p[0] == '?')
+        ba++;
+    if (a->o[0] == '?')
+        ba++;
+    if (b->s[0] == '?')
+        bb++;
+    if (b->p[0] == '?')
+        bb++;
+    if (b->o[0] == '?')
+        bb++;
+    if (ba < bb)
+        return -1;
+    if (ba > bb)
+        return 1;
+    return 0;
 }
 
 /* this only works on expanded specs : (s, p, o, NULL)*, NULL. */
-p_spec spec_sort (p_spec spec)
+p_spec spec_sort(p_spec spec)
 {
-        size_t count;
-        size_t i;
-        assert(spec);
-        count = spec_count_facts(spec);
-        if (count)
-                for (i = 0; i < count - 1; i++) {
-                        size_t j;
-                        for (j = 0; j < count - i - 1; j++) {
-                                s_fact *a = (s_fact*) (spec + j * 4);
-                                s_fact *b = (s_fact*) (spec + (j + 1) * 4);
-                                if (fact_compare_bindings(a, b) > 0) {
-                                        s_fact swap = *a;
-                                        *a = *b;
-                                        *b = swap;
-                                }
-                        }
+    size_t count;
+    size_t i;
+    assert(spec);
+    count = spec_count_facts(spec);
+    if (count)
+        for (i = 0; i < count - 1; i++) {
+            size_t j;
+            for (j = 0; j < count - i - 1; j++) {
+                s_fact *a = (s_fact *)(spec + j * 4);
+                s_fact *b = (s_fact *)(spec + (j + 1) * 4);
+                if (fact_compare_bindings(a, b) > 0) {
+                    s_fact swap = *a;
+                    *a = *b;
+                    *b = swap;
                 }
-        return spec;
-}
-
-void spec_cursor_init (s_spec_cursor *c, p_spec spec)
-{
-        assert(c);
-        assert(spec);
-        c->spec = spec;
-        c->s = spec[0];
-        c->pos = 1;
-}
-
-int spec_cursor_next (s_spec_cursor *c, s_fact *f)
-{
-        const char *p;
-        const char *o;
-        assert(c);
-        assert(f);
-        if (!c->s)
-                return 0;
-        p = c->spec[c->pos];
-        if (p) {
-                o = c->spec[c->pos + 1];
-                if (!o) {
-                        fprintf(stderr, "spec_cursor_next: NULL object\n");
-                        return 0;
-                }
-                c->pos += 2;
-                f->s = c->s;
-                f->p = p;
-                f->o = o;
-                return 1;
+            }
         }
-        c->s = c->spec[c->pos + 1];
+    return spec;
+}
+
+void spec_cursor_init(s_spec_cursor *c, p_spec spec)
+{
+    assert(c);
+    assert(spec);
+    c->spec = spec;
+    c->s = spec[0];
+    c->pos = 1;
+}
+
+int spec_cursor_next(s_spec_cursor *c, s_fact *f)
+{
+    const char *p;
+    const char *o;
+    assert(c);
+    assert(f);
+    if (!c->s)
+        return 0;
+    p = c->spec[c->pos];
+    if (p) {
+        o = c->spec[c->pos + 1];
+        if (!o) {
+            fprintf(stderr, "spec_cursor_next: NULL object\n");
+            return 0;
+        }
         c->pos += 2;
-        return spec_cursor_next(c, f);
+        f->s = c->s;
+        f->p = p;
+        f->o = o;
+        return 1;
+    }
+    c->s = c->spec[c->pos + 1];
+    c->pos += 2;
+    return spec_cursor_next(c, f);
 }
 
-s_binding * spec_bindings (p_spec spec)
+s_binding *spec_bindings(p_spec spec)
 {
-        s_binding *bindings;
-        size_t bindings_size;
-        s_binding *b;
-        const char **vars;
-        size_t vars_size;
-        const char **v;
-        size_t count;
-        if (!spec || !spec[0])
-                return NULL;
-        count = spec_count_bindings(spec);
-        bindings_size = (count + 1) * sizeof(s_binding);
-        vars_size = count * sizeof(char *);
-        bindings = calloc(bindings_size + vars_size, 1);
-        vars = (const char **)(((char *) bindings) + bindings_size);
-        b = bindings;
-        v = vars;
-        while (spec[0] || spec[1]) {
-                if (spec[0] && spec[0][0] == '?') {
-                        b->name = spec[0];
-                        b->value = v;
-                        b++;
-                        v++;
-                }
-                spec++;
+    s_binding *bindings;
+    size_t bindings_size;
+    s_binding *b;
+    const char **vars;
+    size_t vars_size;
+    const char **v;
+    size_t count;
+    if (!spec || !spec[0])
+        return NULL;
+    count = spec_count_bindings(spec);
+    bindings_size = (count + 1) * sizeof(s_binding);
+    vars_size = count * sizeof(char *);
+    bindings = calloc(bindings_size + vars_size, 1);
+    vars = (const char **)(((char *)bindings) + bindings_size);
+    b = bindings;
+    v = vars;
+    while (spec[0] || spec[1]) {
+        if (spec[0] && spec[0][0] == '?') {
+            b->name = spec[0];
+            b->value = v;
+            b++;
+            v++;
         }
-        return bindings;
+        spec++;
+    }
+    return bindings;
 }

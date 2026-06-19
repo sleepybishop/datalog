@@ -18,83 +18,79 @@
 #include <check.h>
 #include "../spec.h"
 
-START_TEST (test_spec_cursor_empty)
+START_TEST(test_spec_cursor_empty)
 {
-        s_spec_cursor c;
-        s_fact f;
-        spec_cursor_init(&c, (const char *[]) {NULL, NULL});
-        ck_assert(!spec_cursor_next(&c, &f));
+    s_spec_cursor c;
+    s_fact f;
+    spec_cursor_init(&c, (const char *[]){NULL, NULL});
+    ck_assert(!spec_cursor_next(&c, &f));
 }
 END_TEST
 
-START_TEST (test_spec_cursor_one)
+START_TEST(test_spec_cursor_one)
 {
-        s_spec_cursor c;
-        s_fact f;
-        spec_cursor_init(&c, (const char *[]) {
-                        "a", "b", "c", NULL, NULL});
-        ck_assert(spec_cursor_next(&c, &f));
-        ck_assert(!strcmp(f.s, "a"));
-        ck_assert(!strcmp(f.p, "b"));
-        ck_assert(!strcmp(f.o, "c"));
-        ck_assert(!spec_cursor_next(&c, &f));
+    s_spec_cursor c;
+    s_fact f;
+    spec_cursor_init(&c, (const char *[]){"a", "b", "c", NULL, NULL});
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert(!strcmp(f.s, "a"));
+    ck_assert(!strcmp(f.p, "b"));
+    ck_assert(!strcmp(f.o, "c"));
+    ck_assert(!spec_cursor_next(&c, &f));
 }
 END_TEST
 
-START_TEST (test_spec_cursor_two)
+START_TEST(test_spec_cursor_two)
 {
-        s_spec_cursor c;
-        s_fact f;
-        spec_cursor_init(&c, (const char *[]) {
-                        "a", "b", "c", "d", "e", NULL, NULL});
-        ck_assert(spec_cursor_next(&c, &f));
-        ck_assert(!strcmp(f.s, "a"));
-        ck_assert(!strcmp(f.p, "b"));
-        ck_assert(!strcmp(f.o, "c"));
-        ck_assert(spec_cursor_next(&c, &f));
-        ck_assert(!strcmp(f.s, "a"));
-        ck_assert(!strcmp(f.p, "d"));
-        ck_assert(!strcmp(f.o, "e"));
-        ck_assert(!spec_cursor_next(&c, &f));
-        spec_cursor_init(&c, (const char *[]) {
-                        "a", "b", "c", NULL,
-                        "b", "d", "e", NULL, NULL});
-        ck_assert(spec_cursor_next(&c, &f));
-        ck_assert(!strcmp(f.s, "a"));
-        ck_assert(!strcmp(f.p, "b"));
-        ck_assert(!strcmp(f.o, "c"));
-        ck_assert(spec_cursor_next(&c, &f));
-        ck_assert(!strcmp(f.s, "b"));
-        ck_assert(!strcmp(f.p, "d"));
-        ck_assert(!strcmp(f.o, "e"));
-        ck_assert(!spec_cursor_next(&c, &f));
+    s_spec_cursor c;
+    s_fact f;
+    spec_cursor_init(&c, (const char *[]){"a", "b", "c", "d", "e", NULL, NULL});
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert(!strcmp(f.s, "a"));
+    ck_assert(!strcmp(f.p, "b"));
+    ck_assert(!strcmp(f.o, "c"));
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert(!strcmp(f.s, "a"));
+    ck_assert(!strcmp(f.p, "d"));
+    ck_assert(!strcmp(f.o, "e"));
+    ck_assert(!spec_cursor_next(&c, &f));
+    spec_cursor_init(&c, (const char *[]){"a", "b", "c", NULL, "b", "d", "e", NULL, NULL});
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert(!strcmp(f.s, "a"));
+    ck_assert(!strcmp(f.p, "b"));
+    ck_assert(!strcmp(f.o, "c"));
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert(!strcmp(f.s, "b"));
+    ck_assert(!strcmp(f.p, "d"));
+    ck_assert(!strcmp(f.o, "e"));
+    ck_assert(!spec_cursor_next(&c, &f));
 }
 END_TEST
 
-Suite * spec_suite(void)
+Suite *spec_suite(void)
 {
-        Suite *s;
-        TCase *tc_cursor;
-        s = suite_create("Spec");
-        tc_cursor = tcase_create("Cursor");
-        tcase_add_test(tc_cursor, test_spec_cursor_empty);
-        tcase_add_test(tc_cursor, test_spec_cursor_one);
-        tcase_add_test(tc_cursor, test_spec_cursor_two);
-        suite_add_tcase(s, tc_cursor);
-        return s;
+    Suite *s;
+    TCase *tc_cursor;
+    s = suite_create("Spec");
+    tc_cursor = tcase_create("Cursor");
+    tcase_add_test(tc_cursor, test_spec_cursor_empty);
+    tcase_add_test(tc_cursor, test_spec_cursor_one);
+    tcase_add_test(tc_cursor, test_spec_cursor_two);
+    suite_add_tcase(s, tc_cursor);
+    return s;
 }
 
 int main(void)
 {
-        int number_failed;
-        Suite *s;
-        SRunner *sr;
+    int number_failed;
+    Suite *s;
+    SRunner *sr;
 
-        s = spec_suite();
-        sr = srunner_create(s);
+    s = spec_suite();
+    sr = srunner_create(s);
 
-        srunner_run_all(sr, CK_NORMAL);
-        number_failed = srunner_ntests_failed(sr);
-        srunner_free(sr);
-        return (number_failed == 0) ? 0 : 1;
+    srunner_run_all(sr, CK_NORMAL);
+    number_failed = srunner_ntests_failed(sr);
+    srunner_free(sr);
+    return (number_failed == 0) ? 0 : 1;
 }
