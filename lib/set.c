@@ -186,7 +186,7 @@ s_set_item *set_get_h(s_set *set, const void *data, size_t len, size_t hash)
     assert(data);
     assert(len > 0);
     i = set_get_hash(set, hash);
-    while (i) {
+    while (i && i->data) {
         if (len == i->len && memcmp(data, i->data, len) == 0)
             return i;
         i = set_get_hash_next(i);
