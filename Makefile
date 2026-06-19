@@ -1,7 +1,10 @@
 OBJ=\
+deps/rax/rax.o\
 lib/random.o\
 lib/fact.o\
 lib/set.o\
+lib/intern.o\
+lib/arena.o\
 lib/rw.o\
 lib/binding.o\
 lib/skiplist.o\
@@ -9,12 +12,15 @@ lib/facts.o\
 lib/spec.o
 
 
+
 TEST_UTILS=\
 t/00util/test/check_fact\
 t/00util/test/check_facts\
+t/00util/test/check_intern\
 t/00util/test/check_set\
 t/00util/test/check_skiplist\
 t/00util/test/check_spec
+
 
 BENCH_UTILS=\
 t/00util/bench/benchmark_facts_add\
@@ -24,7 +30,7 @@ t/00util/bench/benchmark_set_add_overflow\
 t/00util/bench/benchmark_set_get\
 t/00util/bench/benchmark_set_remove
 
-CPPFLAGS = -Iinclude -D_DEFAULT_SOURCE
+CPPFLAGS = -Iinclude -Ideps/rax -D_DEFAULT_SOURCE
 CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC
 LDLIBS = -lm
 
@@ -45,6 +51,8 @@ t/00util/bench/benchmark_set_remove: t/00util/bench/benchmark_set_remove.o $(OBJ
 t/00util/test/check_fact: t/00util/test/check_fact.o $(OBJ)
 
 t/00util/test/check_facts: t/00util/test/check_facts.o $(OBJ)
+
+t/00util/test/check_intern: t/00util/test/check_intern.o $(OBJ)
 
 t/00util/test/check_set: t/00util/test/check_set.o $(OBJ)
 

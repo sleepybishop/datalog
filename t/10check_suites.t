@@ -19,6 +19,7 @@ subtest "check suites" => sub {
     my @suites = (
         "check_fact",
         "check_facts",
+        "check_intern",
         "check_set",
         "check_skiplist",
         "check_spec"
