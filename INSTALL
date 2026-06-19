@@ -1,4 +1,2 @@
-./configure
 make
-make tests
-make benchmark
+make check
