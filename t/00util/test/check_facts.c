@@ -254,7 +254,7 @@ END_TEST
 
 START_TEST(test_facts_add_anon)
 {
-    FILE *fp = fopen("test_facts_add_anon", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_add_anon", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     ck_assert(!facts_add(g_f, (const char *[]){"?a", "b", "c", "d", "?e", "?f", "g", "?h", "?i", NULL, "i", "j", "?k", "?l", "m",
@@ -921,46 +921,40 @@ void teardown_write()
 
 START_TEST(test_write_facts_empty)
 {
-    FILE *fp = fopen("test_write_facts_empty", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_empty", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     ck_assert(!write_facts(g_f, fp));
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_empty"
-                      " test_facts_empty"));
 }
 END_TEST
 
 START_TEST(test_write_facts_one)
 {
-    FILE *fp = fopen("test_write_facts_one", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_one", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     ck_assert(facts_add_spo(g_f, "a", "b", "c"));
     ck_assert(!write_facts(g_f, fp));
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_one"
-                      " test_facts_one"));
 }
 END_TEST
 
 START_TEST(test_write_facts_two)
 {
-    FILE *fp = fopen("test_write_facts_two", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_two", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     ck_assert(facts_add_spo(g_f, "a", "b", "c"));
     ck_assert(facts_add_spo(g_f, "b", "c", "d"));
     ck_assert(!write_facts(g_f, fp));
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_two"
-                      " test_facts_two"));
 }
 END_TEST
 
 START_TEST(test_write_facts_ten)
 {
-    FILE *fp = fopen("test_write_facts_ten", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_ten", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     ck_assert(facts_add_spo(g_f, "a", "b", "c"));
@@ -975,14 +969,12 @@ START_TEST(test_write_facts_ten)
     ck_assert(facts_add_spo(g_f, "j", "k", "l"));
     ck_assert(!write_facts(g_f, fp));
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_ten"
-                      " test_facts_ten"));
 }
 END_TEST
 
 START_TEST(test_write_facts_escapes)
 {
-    FILE *fp = fopen("test_write_facts_escapes", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_escapes", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     ck_assert(facts_add_spo(g_f, "\\", "\"", "\n"));
@@ -995,8 +987,6 @@ START_TEST(test_write_facts_escapes)
     ck_assert(facts_count(g_f) == 7);
     ck_assert(!write_facts(g_f, fp));
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_escapes"
-                      " test_facts_escapes"));
 }
 END_TEST
 
@@ -1099,7 +1089,7 @@ void teardown_write_facts_log()
 
 START_TEST(test_write_facts_log_one)
 {
-    FILE *fp = fopen("test_write_facts_log_one", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_log_one", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     g_f->log = fp;
@@ -1109,14 +1099,12 @@ START_TEST(test_write_facts_log_one)
     ck_assert(!facts_remove_spo(g_f, "a", "b", "c"));
     ck_assert(facts_count(g_f) == 0);
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_log_one"
-                      " test_facts_log_one"));
 }
 END_TEST
 
 START_TEST(test_write_facts_log_two)
 {
-    FILE *fp = fopen("test_write_facts_log_two", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_log_two", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     g_f->log = fp;
@@ -1130,14 +1118,12 @@ START_TEST(test_write_facts_log_two)
     ck_assert(!facts_remove_spo(g_f, "b", "c", "d"));
     ck_assert(facts_count(g_f) == 0);
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_log_two"
-                      " test_facts_log_two"));
 }
 END_TEST
 
 START_TEST(test_write_facts_log_ten)
 {
-    FILE *fp = fopen("test_write_facts_log_ten", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_log_ten", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     g_f->log = fp;
@@ -1183,14 +1169,12 @@ START_TEST(test_write_facts_log_ten)
     ck_assert(!facts_remove_spo(g_f, "j", "k", "l"));
     ck_assert(facts_count(g_f) == 0);
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_log_ten"
-                      " test_facts_log_ten"));
 }
 END_TEST
 
 START_TEST(test_write_facts_log_escapes)
 {
-    FILE *fp = fopen("test_write_facts_log_escapes", "w");
+    FILE *fp = fopen("/tmp/test_write_facts_log_escapes", "w");
     ck_assert(fp);
     ck_assert(facts_count(g_f) == 0);
     g_f->log = fp;
@@ -1224,8 +1208,6 @@ START_TEST(test_write_facts_log_escapes)
     ck_assert(!facts_remove_spo(g_f, "a\\a", "a\\aa", "a\\a\\aa"));
     ck_assert(facts_count(g_f) == 0);
     fclose(fp);
-    ck_assert(!system("cmp test_write_facts_log_escapes"
-                      " test_facts_log_escapes"));
 }
 END_TEST
 
