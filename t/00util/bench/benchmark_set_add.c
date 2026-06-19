@@ -1,7 +1,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "../set.h"
+#include "set.h"
 
 #define ITERATIONS (1000 * 1000)
 

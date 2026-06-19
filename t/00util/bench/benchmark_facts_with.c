@@ -1,7 +1,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "../facts.h"
+#include "facts.h"
 
 #define ITERATIONS (1000 * 2)
 #define WITH_ITERATIONS (1000)
