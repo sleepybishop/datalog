@@ -22,3 +22,10 @@ t/00util/test/check_facts
 t/00util/test/check_set
 t/00util/test/check_skiplist
 t/00util/test/check_spec
+t/00util/test/check_eval
+t/00util/test/check_intern
+t/00util/test/check_magic
+t/00util/test/check_movie_integration
+t/00util/test/check_rule
+t/00util/test/check_sparql
+t/00util/test/check_triejoin
