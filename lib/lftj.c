@@ -49,6 +49,15 @@ void init_lftj_iterator(s_lftj_iterator *it, struct rax *symbols, int col1, int 
     raxStart(&it->it, symbols);
 }
 
+s_lftj_iterator *new_lftj_iterator(struct rax *symbols, int col1, int col2, int col3)
+{
+    s_lftj_iterator *it = malloc(sizeof(s_lftj_iterator));
+    if (it) {
+        init_lftj_iterator(it, symbols, col1, col2, col3);
+    }
+    return it;
+}
+
 void delete_lftj_iterator(s_lftj_iterator *it)
 {
     if (it) {
@@ -73,6 +82,9 @@ Symbol iterator_key(s_lftj_iterator *it)
 
 int iterator_open(s_lftj_iterator *it)
 {
+    unsigned char query_key[24];
+    memset(query_key, 0, 24);
+
     if (it->depth == 0) {
         raxSeek(&it->it, "^", NULL, 0);
         if (raxEOF(&it->it))
@@ -83,6 +95,8 @@ int iterator_open(s_lftj_iterator *it)
         return 0;
     }
     if (it->depth == 1) {
+        encode_uint64_be(query_key, get_symbol_id(it->val1));
+        raxSeek(&it->it, ">=", query_key, 24);
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -92,6 +106,9 @@ int iterator_open(s_lftj_iterator *it)
         it->depth = 2;
         return 0;
     } else if (it->depth == 2) {
+        encode_uint64_be(query_key, get_symbol_id(it->val1));
+        encode_uint64_be(query_key + 8, get_symbol_id(it->val2));
+        raxSeek(&it->it, ">=", query_key, 24);
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -157,31 +174,31 @@ int iterator_next(s_lftj_iterator *it)
 {
     if (it->depth == 1) {
         while (1) {
-            it->it.flags &= ~RAX_ITER_JUST_SEEKED;
-            raxNext(&it->it);
             if (raxEOF(&it->it))
                 return -1;
             s_fact *f = it->it.data;
-            Symbol next_val = fact_get_col(f, it->col1);
-            if (next_val != it->val1) {
-                it->val1 = next_val;
+            Symbol current_val = fact_get_col(f, it->col1);
+            if (current_val != it->val1) {
+                it->val1 = current_val;
                 return 0;
             }
+            it->it.flags &= ~RAX_ITER_JUST_SEEKED;
+            raxNext(&it->it);
         }
     } else if (it->depth == 2) {
         while (1) {
-            it->it.flags &= ~RAX_ITER_JUST_SEEKED;
-            raxNext(&it->it);
             if (raxEOF(&it->it))
                 return -1;
             s_fact *f = it->it.data;
             if (fact_get_col(f, it->col1) != it->val1)
                 return -1;
-            Symbol next_val = fact_get_col(f, it->col2);
-            if (next_val != it->val2) {
-                it->val2 = next_val;
+            Symbol current_val = fact_get_col(f, it->col2);
+            if (current_val != it->val2) {
+                it->val2 = current_val;
                 return 0;
             }
+            it->it.flags &= ~RAX_ITER_JUST_SEEKED;
+            raxNext(&it->it);
         }
     } else if (it->depth == 3) {
         it->it.flags &= ~RAX_ITER_JUST_SEEKED;
@@ -197,7 +214,7 @@ int iterator_next(s_lftj_iterator *it)
     return -1;
 }
 
-// Helper to sort iterators by current key
+/* Helper to sort iterators by current key */
 static void sort_iterators(s_lftj_iterator **arr, int count)
 {
     for (int i = 0; i < count - 1; i++) {
@@ -213,7 +230,7 @@ static void sort_iterators(s_lftj_iterator **arr, int count)
     }
 }
 
-// Leapfrog intersection search
+/* Leapfrog intersection search */
 static Symbol leapfrog_search(s_lftj_iterator **arr, int count)
 {
     if (count == 0)
@@ -259,7 +276,7 @@ static Symbol get_bound_var_sym(s_facts *facts, const char *var_name, s_binding 
     return NULL;
 }
 
-// Recursive Leapfrog solver
+/* Recursive Leapfrog solver */
 static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *bindings, int var_idx, const char **vars,
                           int vars_count, s_lftj_iterator **iterators, int subgoal_count, int iterator_cols[][3],
                           void (*cb)(s_binding *bindings, void *user_data), void *user_data)
@@ -293,13 +310,13 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
                 bound_sym = get_bound_var_sym(facts, val_var, bindings);
             }
 
-            if (val_var == NULL) { // Constant
-                if (iterator_open(it) != 0 || iterator_seek(it, val_sym) != 0) {
+            if (val_var == NULL) { /* Constant */
+                if (iterator_open(it) != 0 || iterator_seek(it, val_sym) != 0 || iterator_key(it) != val_sym) {
                     goto backtrack_temp;
                 }
                 opened_levels[i]++;
-            } else if (bound_sym != NULL) { // Already bound variable -> treat as constant
-                if (iterator_open(it) != 0 || iterator_seek(it, bound_sym) != 0) {
+            } else if (bound_sym != NULL) { /* Already bound variable -> treat as constant */
+                if (iterator_open(it) != 0 || iterator_seek(it, bound_sym) != 0 || iterator_key(it) != bound_sym) {
                     goto backtrack_temp;
                 }
                 opened_levels[i]++;
@@ -355,7 +372,7 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
     return found_solutions;
 }
 
-// Entrypoint for Leapfrog Triejoin query evaluation
+/* Entrypoint for Leapfrog Triejoin query evaluation */
 int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
 {
     int subgoal_count = spec_count_facts(spec);
@@ -375,7 +392,7 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
         subgoals[i].o_var = (f->o && f->o[0] == '?') ? f->o : NULL;
         subgoals[i].o_sym = subgoals[i].o_var ? NULL : facts_find_symbol_str(facts, f->o);
 
-        // If a constant is not found in the database symbols, the query has 0 solutions!
+        /* If a constant is not found in the database symbols, the query has 0 solutions! */
         if ((!subgoals[i].s_var && !subgoals[i].s_sym) || (!subgoals[i].p_var && !subgoals[i].p_sym) ||
             (!subgoals[i].o_var && !subgoals[i].o_sym)) {
             return 0;
@@ -422,9 +439,9 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
     }
 
     static const int trie_candidate_cols[3][3] = {
-        {0, 1, 2}, // trie_spo
-        {1, 2, 0}, // trie_pos
-        {2, 0, 1}  // trie_osp
+        {0, 1, 2}, /* trie_spo */
+        {1, 2, 0}, /* trie_pos */
+        {2, 0, 1}  /* trie_osp */
     };
 
     s_lftj_iterator iterators_storage[32];

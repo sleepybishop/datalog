@@ -10,11 +10,11 @@
 struct facts;
 struct fact;
 
-// Iterator
+/* Iterator */
 typedef struct lftj_iterator {
     struct rax *symbols;
     raxIterator it;
-    int depth; // 0, 1, 2, 3
+    int depth; /* 0, 1, 2, 3 */
     int col1, col2, col3;
     Symbol val1;
     Symbol val2;
@@ -30,7 +30,7 @@ int iterator_seek(s_lftj_iterator *it, Symbol key);
 int iterator_open(s_lftj_iterator *it);
 int iterator_up(s_lftj_iterator *it);
 
-// Leapfrog Triejoin Solver
+/* Leapfrog Triejoin Solver */
 int facts_lftj_solve(struct facts *facts, p_spec spec, s_binding *bindings);
 int facts_lftj_solve_multi(struct facts *facts, struct facts **dbs, p_spec spec, s_binding *bindings,
                            void (*cb)(s_binding *bindings, void *user_data), void *user_data);

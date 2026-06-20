@@ -41,17 +41,13 @@ t/00util/bench/benchmark_facts_with\
 t/00util/bench/benchmark_set_add\
 t/00util/bench/benchmark_set_add_overflow\
 t/00util/bench/benchmark_set_get\
-t/00util/bench/benchmark_set_remove\
-t/00util/bench/benchmark_query_ns
+t/00util/bench/benchmark_set_remove
 
 CPPFLAGS = -Iinclude -Ideps/rax -D_DEFAULT_SOURCE
 CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC
 LDLIBS = -lm
 
 all: libdatalog.a sparql_repl
-
-t/00util/bench/benchmark_query_ns: t/00util/bench/benchmark_query_ns.o $(OBJ)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
 t/00util/bench/benchmark_facts_add: t/00util/bench/benchmark_facts_add.o $(OBJ)
 
