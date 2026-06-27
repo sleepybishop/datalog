@@ -29,3 +29,7 @@ t/00util/test/check_movie_integration
 t/00util/test/check_rule
 t/00util/test/check_sparql
 t/00util/test/check_triejoin
+sparql_repl
+examples/linda_demo
+gmon.out
+profile.txt
