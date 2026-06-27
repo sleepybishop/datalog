@@ -31,5 +31,6 @@ t/00util/test/check_sparql
 t/00util/test/check_triejoin
 sparql_repl
 examples/linda_demo
+examples/rete_demo
 gmon.out
 profile.txt

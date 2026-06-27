@@ -338,3 +338,147 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
     free(rule_strata);
     return (int)total_derived;
 }
+
+int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog, const s_rollback_entry *delta, size_t delta_count)
+{
+    if (!facts || !prog || !delta || delta_count == 0)
+        return 0;
+
+    int num_strata = 0;
+    int *rule_strata = datalog_program_stratify(prog, &num_strata);
+    if (!rule_strata)
+        return -1;
+
+    size_t total_derived = 0;
+
+    for (int s = 0; s < num_strata; s++) {
+        const char **idb_preds = NULL;
+        size_t idb_preds_count = 0;
+        for (size_t r = 0; r < prog->rule_count; r++) {
+            if (rule_strata[r] == s) {
+                const s_datalog_rule *rule = &prog->rules[r];
+                if (rule->head.p && rule->head.p[0] != '?') {
+                    add_pred_to_list_eval(&idb_preds, &idb_preds_count, rule->head.p);
+                }
+            }
+        }
+
+        s_facts *old_db = new_facts(facts->symbols, 100000);
+        s_facts *delta_db = new_facts(facts->symbols, 100000);
+        s_facts *new_db = new_facts(facts->symbols, 100000);
+        s_facts *old_plus_delta_db = new_facts(facts->symbols, 100000);
+
+        for (size_t i = 0; i < delta_count; i++) {
+            if (delta[i].action == ROLLBACK_REMOVE) {
+                facts_add_spo(delta_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
+                              symbol_to_str(delta[i].fact.o));
+            }
+        }
+
+        if (facts_count(delta_db) == 0) {
+            delete_facts(old_db);
+            delete_facts(delta_db);
+            delete_facts(new_db);
+            delete_facts(old_plus_delta_db);
+            free(idb_preds);
+            continue;
+        }
+
+        facts_merge_count(old_db, delta_db);
+
+        while (1) {
+            facts_reset(new_db);
+            facts_reset(old_plus_delta_db);
+            facts_merge_count(old_plus_delta_db, old_db);
+            facts_merge_count(old_plus_delta_db, delta_db);
+
+            size_t iter_derived = 0;
+            for (size_t r = 0; r < prog->rule_count; r++) {
+                if (rule_strata[r] != s)
+                    continue;
+                const s_datalog_rule *rule = &prog->rules[r];
+
+                int target_count = 0;
+                int target_indices[32];
+                for (size_t j = 0; j < rule->body_count; j++) {
+                    if (!rule->body[j].negated) {
+                        target_indices[target_count++] = (int)j;
+                    }
+                }
+
+                if (target_count == 0)
+                    continue;
+
+                for (int v = 0; v < target_count; v++) {
+                    p_spec spec = compile_positive_rule_body_to_spec(rule);
+                    s_binding *bindings = spec_bindings(spec);
+                    s_facts *dbs[32];
+
+                    size_t pos_idx = 0;
+                    for (size_t j = 0; j < rule->body_count; j++) {
+                        if (rule->body[j].negated)
+                            continue;
+
+                        int rec_idx = -1;
+                        for (int w = 0; w < target_count; w++) {
+                            if (target_indices[w] == (int)j) {
+                                rec_idx = w;
+                                break;
+                            }
+                        }
+
+                        if (rec_idx == v)
+                            dbs[pos_idx] = delta_db;
+                        else
+                            dbs[pos_idx] = facts;
+
+                        pos_idx++;
+                    }
+
+                    s_eval_cb_data cb_data;
+                    cb_data.target_db = new_db;
+                    cb_data.rule = rule;
+                    cb_data.old_db = old_db;
+                    cb_data.main_facts = facts;
+                    cb_data.derived_count = 0;
+
+                    facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
+                    iter_derived += cb_data.derived_count;
+                    free(spec);
+                    free(bindings);
+                }
+            }
+
+            if (iter_derived == 0)
+                break;
+
+            facts_merge_count(old_db, delta_db);
+            facts_reset(delta_db);
+            facts_merge_count(delta_db, new_db);
+            total_derived += facts_merge_count(facts, new_db);
+        }
+
+        delete_facts(old_db);
+        delete_facts(delta_db);
+        delete_facts(new_db);
+        delete_facts(old_plus_delta_db);
+        free(idb_preds);
+    }
+    free(rule_strata);
+    return (int)total_derived;
+}
+
+void rete_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
+{
+    (void)user_data;
+    if (facts->disable_listener) {
+        return;
+    }
+    if (!facts->prog) {
+        return;
+    }
+
+    facts->disable_listener = 1;
+    facts_datalog_eval_incremental(facts, facts->prog, entries, entry_count);
+    facts->disable_listener = 0;
+}

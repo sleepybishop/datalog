@@ -1,0 +1,5 @@
+?X grandparent ?Y :- ?X parent ?Z, ?Z parent ?Y .
+INSERT DATA { <Alice> <parent> <Bob> . <Bob> <parent> <Charlie> . }
+SELECT ?X ?Y WHERE { ?X <grandparent> ?Y }
+INSERT DATA { <Charlie> <parent> <David> . }
+SELECT ?X ?Y WHERE { ?X <grandparent> ?Y }

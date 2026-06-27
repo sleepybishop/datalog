@@ -203,11 +203,9 @@ int iterator_next(s_lftj_iterator *it)
     } else if (it->depth == 3) {
         it->it.flags &= ~RAX_ITER_JUST_SEEKED;
         raxNext(&it->it);
-        if (raxEOF(&it->it))
-            return -1;
+        if (raxEOF(&it->it)) return -1;
         s_fact *f = it->it.data;
-        if (fact_get_col(f, it->col1) != it->val1 || fact_get_col(f, it->col2) != it->val2)
-            return -1;
+        if (fact_get_col(f, it->col1) != it->val1 || fact_get_col(f, it->col2) != it->val2) return -1;
         it->val3 = fact_get_col(f, it->col3);
         return 0;
     }
@@ -311,7 +309,10 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
             }
 
             if (val_var == NULL) { /* Constant */
-                if (iterator_open(it) != 0 || iterator_seek(it, val_sym) != 0 || iterator_key(it) != val_sym) {
+                int r1 = iterator_open(it);
+                int r2 = r1 == 0 ? iterator_seek(it, val_sym) : -1;
+                Symbol k = iterator_key(it);
+                if (r1 != 0 || r2 != 0 || k != val_sym) {
                     goto backtrack_temp;
                 }
                 opened_levels[i]++;

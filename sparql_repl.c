@@ -40,10 +40,6 @@ void clear_idb_facts(s_facts *facts, const s_datalog_program *prog)
 
 void execute_query(s_facts *facts, const char *query_str)
 {
-    if (repl_program && repl_program->rule_count > 0) {
-        clear_idb_facts(facts, repl_program);
-        facts_datalog_eval(facts, repl_program);
-    }
     int is_ask = sparql_query_is_ask(facts, query_str);
     if (is_ask < 0) {
         fprintf(stderr, "Error: failed to parse query\n");
@@ -126,6 +122,7 @@ void process_input(s_facts *facts, const char *line, const char *db_filename)
         printf("Rules cleared.\n");
     } else if (strstr(line, ":-") != NULL) {
         if (datalog_program_parse_rules(repl_program, line) == 0) {
+            facts_datalog_eval(facts, repl_program);
             printf("Successfully added rule(s).\n");
         } else {
             fprintf(stderr, "Error: failed to parse or validate rule(s)\n");
@@ -163,6 +160,7 @@ int main(int argc, char **argv)
     repl_program = new_datalog_program();
     s_intern *sym = new_intern(100000);
     s_facts *facts = new_facts(sym, 100000);
+    facts->prog = repl_program;
     const char *db_filename = NULL;
 
     if (argc > 1) {

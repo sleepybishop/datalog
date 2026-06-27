@@ -12,5 +12,8 @@
  * Returns -1 on error (e.g., if the program is unstratified).
  */
 int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog);
+int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog, const struct rollback_entry *delta,
+                                   size_t delta_count);
+void rete_tx_listener(s_facts *facts, const struct rollback_entry *entries, size_t entry_count, void *user_data);
 
 #endif

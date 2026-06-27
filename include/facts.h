@@ -5,6 +5,7 @@
 #include "binding.h"
 #include "fact.h"
 #include "intern.h"
+#include "rule.h"
 #include "set.h"
 #include "rax.h"
 #include "spec.h"
@@ -28,6 +29,10 @@ typedef struct facts {
 
     // Decoupled Transactions
     s_transaction tx;
+
+    // Reactive Rete-like Rule Evaluation
+    s_datalog_program *prog;
+    int disable_listener;
 } s_facts;
 
 void facts_init(s_facts *facts, s_intern *symbols, unsigned long max);

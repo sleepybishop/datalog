@@ -8,6 +8,7 @@
 #include "random.h"
 #include "io.h"
 #include "lftj.h"
+#include "eval.h"
 
 void facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact);
 
@@ -62,7 +63,11 @@ void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
     facts->index_osp = facts->hexastore->trie_osp;
     facts->log = NULL;
 
+    facts->prog = NULL;
+    facts->disable_listener = 0;
+
     transaction_init(&facts->tx);
+    facts_register_tx_listener(facts, rete_tx_listener, NULL);
 }
 
 void facts_destroy(s_facts *facts)
@@ -109,6 +114,7 @@ void facts_reset(s_facts *facts)
     // 5. Reset transaction data/state
     transaction_destroy(&facts->tx);
     transaction_init(&facts->tx);
+    facts_register_tx_listener(facts, rete_tx_listener, NULL);
 }
 
 s_facts *new_facts(s_intern *symbols, unsigned long max)
