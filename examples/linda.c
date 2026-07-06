@@ -35,17 +35,22 @@ s_linda_space *new_linda_space(unsigned long max_symbols)
         return NULL;
     }
 
-    if (pthread_mutex_init(&space->lock, NULL) != 0) {
-        delete_facts(space->db);
-        free(space);
-        return NULL;
-    }
-
     for (int i = 0; i < LINDA_COND_PARTITIONS; i++) {
-        if (pthread_cond_init(&space->conds[i], NULL) != 0) {
-            for (int j = 0; j < i; j++)
+        if (pthread_mutex_init(&space->locks[i], NULL) != 0) {
+            for (int j = 0; j < i; j++) {
                 pthread_cond_destroy(&space->conds[j]);
-            pthread_mutex_destroy(&space->lock);
+                pthread_mutex_destroy(&space->locks[j]);
+            }
+            delete_facts(space->db);
+            free(space);
+            return NULL;
+        }
+        if (pthread_cond_init(&space->conds[i], NULL) != 0) {
+            pthread_mutex_destroy(&space->locks[i]);
+            for (int j = 0; j < i; j++) {
+                pthread_cond_destroy(&space->conds[j]);
+                pthread_mutex_destroy(&space->locks[j]);
+            }
             delete_facts(space->db);
             free(space);
             return NULL;
@@ -62,8 +67,8 @@ void delete_linda_space(s_linda_space *space)
 
     for (int i = 0; i < LINDA_COND_PARTITIONS; i++) {
         pthread_cond_destroy(&space->conds[i]);
+        pthread_mutex_destroy(&space->locks[i]);
     }
-    pthread_mutex_destroy(&space->lock);
     delete_facts(space->db);
     free(space);
 }
@@ -73,19 +78,21 @@ int linda_out(s_linda_space *space, const char *s, const char *p, const char *o)
     if (!space || !s || !p || !o)
         return -1;
 
-    pthread_mutex_lock(&space->lock);
-
+    unsigned int idx = get_linda_cond_idx(s);
     facts_transaction_begin(space->db);
     facts_add_spo(space->db, s, p, o);
     facts_transaction_commit(space->db);
 
-    unsigned int idx = get_linda_cond_idx(s);
+    pthread_mutex_lock(&space->locks[idx]);
     pthread_cond_broadcast(&space->conds[idx]);
+    pthread_mutex_unlock(&space->locks[idx]);
+
     if (idx != 0) {
+        pthread_mutex_lock(&space->locks[0]);
         pthread_cond_broadcast(&space->conds[0]);
+        pthread_mutex_unlock(&space->locks[0]);
     }
 
-    pthread_mutex_unlock(&space->lock);
     return 0;
 }
 
@@ -137,14 +144,15 @@ int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, 
     if (!space || !s || !p || !o)
         return -1;
 
-    pthread_mutex_lock(&space->lock);
+    unsigned int idx = get_linda_cond_idx(s);
+    pthread_mutex_lock(&space->locks[idx]);
 
     while (1) {
         if (match_and_extract(space, s, p, o, out_s, max_s, out_p, max_p, out_o, max_o)) {
-            pthread_mutex_unlock(&space->lock);
+            pthread_mutex_unlock(&space->locks[idx]);
             return 0;
         }
-        pthread_cond_wait(&space->conds[get_linda_cond_idx(s)], &space->lock);
+        pthread_cond_wait(&space->conds[idx], &space->locks[idx]);
     }
 }
 
@@ -154,11 +162,16 @@ int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, 
     if (!space || !s || !p || !o)
         return -1;
 
-    pthread_mutex_lock(&space->lock);
+    unsigned int idx = get_linda_cond_idx(s);
+    pthread_mutex_lock(&space->locks[idx]);
 
     while (1) {
         char match_s[256], match_p[256], match_o[256];
+        facts_transaction_begin(space->db);
         if (match_and_extract(space, s, p, o, match_s, sizeof(match_s), match_p, sizeof(match_p), match_o, sizeof(match_o))) {
+            facts_remove_spo(space->db, match_s, match_p, match_o);
+            facts_transaction_commit(space->db);
+
             if (out_s && max_s > 0) {
                 strncpy(out_s, match_s, max_s - 1);
                 out_s[max_s - 1] = '\0';
@@ -172,14 +185,11 @@ int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, 
                 out_o[max_o - 1] = '\0';
             }
 
-            facts_transaction_begin(space->db);
-            facts_remove_spo(space->db, match_s, match_p, match_o);
-            facts_transaction_commit(space->db);
-
-            pthread_mutex_unlock(&space->lock);
+            pthread_mutex_unlock(&space->locks[idx]);
             return 0;
         }
-        pthread_cond_wait(&space->conds[get_linda_cond_idx(s)], &space->lock);
+        facts_transaction_commit(space->db);
+        pthread_cond_wait(&space->conds[idx], &space->locks[idx]);
     }
 }
 
@@ -189,10 +199,7 @@ int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o,
     if (!space || !s || !p || !o)
         return -1;
 
-    pthread_mutex_lock(&space->lock);
-    int found = match_and_extract(space, s, p, o, out_s, max_s, out_p, max_p, out_o, max_o);
-    pthread_mutex_unlock(&space->lock);
-    return found;
+    return match_and_extract(space, s, p, o, out_s, max_s, out_p, max_p, out_o, max_o);
 }
 
 int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
@@ -201,10 +208,13 @@ int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o,
     if (!space || !s || !p || !o)
         return -1;
 
-    pthread_mutex_lock(&space->lock);
     char match_s[256], match_p[256], match_o[256];
+    facts_transaction_begin(space->db);
     int found = match_and_extract(space, s, p, o, match_s, sizeof(match_s), match_p, sizeof(match_p), match_o, sizeof(match_o));
     if (found) {
+        facts_remove_spo(space->db, match_s, match_p, match_o);
+        facts_transaction_commit(space->db);
+
         if (out_s && max_s > 0) {
             strncpy(out_s, match_s, max_s - 1);
             out_s[max_s - 1] = '\0';
@@ -217,12 +227,9 @@ int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o,
             strncpy(out_o, match_o, max_o - 1);
             out_o[max_o - 1] = '\0';
         }
-
-        facts_transaction_begin(space->db);
-        facts_remove_spo(space->db, match_s, match_p, match_o);
+    } else {
         facts_transaction_commit(space->db);
     }
-    pthread_mutex_unlock(&space->lock);
     return found;
 }
 

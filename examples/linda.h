@@ -11,9 +11,9 @@
 #define LINDA_COND_PARTITIONS 64
 
 typedef struct {
-    s_facts *db;
     s_intern *sym;
-    pthread_mutex_t lock;
+    s_facts *db;
+    pthread_mutex_t locks[LINDA_COND_PARTITIONS];
     pthread_cond_t conds[LINDA_COND_PARTITIONS];
 } s_linda_space;
 
