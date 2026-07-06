@@ -173,10 +173,10 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
         }
 
         /* 2. Create query-local databases for stratum evaluation */
-        s_facts *old_db = new_facts(facts->symbols, 100000);
-        s_facts *delta_db = new_facts(facts->symbols, 100000);
-        s_facts *new_db = new_facts(facts->symbols, 100000);
-        s_facts *old_plus_delta_db = new_facts(facts->symbols, 100000);
+        s_facts *old_db = new_facts(facts->symbols, 256);
+        s_facts *delta_db = new_facts(facts->symbols, 256);
+        s_facts *new_db = new_facts(facts->symbols, 256);
+        s_facts *old_plus_delta_db = new_facts(facts->symbols, 256);
 
         /* 3. Iteration 0: Naive evaluation to seed delta_db */
         for (size_t r = 0; r < prog->rule_count; r++) {
@@ -350,7 +350,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         return -1;
 
     size_t total_derived = 0;
-    s_facts *cumulative_delta_db = new_facts(facts->symbols, 100000);
+    s_facts *cumulative_delta_db = new_facts(facts->symbols, 256);
 
     for (size_t i = 0; i < delta_count; i++) {
         if (delta[i].action == ROLLBACK_REMOVE) {
@@ -371,10 +371,10 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
             }
         }
 
-        s_facts *old_db = new_facts(facts->symbols, 100000);
-        s_facts *delta_db = new_facts(facts->symbols, 100000);
-        s_facts *new_db = new_facts(facts->symbols, 100000);
-        s_facts *old_plus_delta_db = new_facts(facts->symbols, 100000);
+        s_facts *old_db = new_facts(facts->symbols, 256);
+        s_facts *delta_db = new_facts(facts->symbols, 256);
+        s_facts *new_db = new_facts(facts->symbols, 256);
+        s_facts *old_plus_delta_db = new_facts(facts->symbols, 256);
 
         facts_merge_count(delta_db, cumulative_delta_db);
 
