@@ -68,8 +68,8 @@ int linda_out(s_linda_space *space, const char *s, const char *p, const char *o)
     return 0;
 }
 
-static int match_and_extract(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p,
-                             char *out_o)
+static int match_and_extract(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s,
+                             char *out_p, size_t max_p, char *out_o, size_t max_o)
 {
     const char *spec[5] = {s, p, o, NULL, NULL};
     s_binding *bindings = spec_bindings(spec);
@@ -77,29 +77,32 @@ static int match_and_extract(s_linda_space *space, const char *s, const char *p,
     facts_with(space->db, bindings, &c, spec);
     int found = facts_with_cursor_next(&c);
     if (found) {
-        if (out_s) {
+        if (out_s && max_s > 0) {
             if (s[0] == '?') {
                 const char **val = bindings_get(bindings, s);
-                strcpy(out_s, (val && *val) ? *val : s);
+                strncpy(out_s, (val && *val) ? *val : s, max_s - 1);
             } else {
-                strcpy(out_s, s);
+                strncpy(out_s, s, max_s - 1);
             }
+            out_s[max_s - 1] = '\0';
         }
-        if (out_p) {
+        if (out_p && max_p > 0) {
             if (p[0] == '?') {
                 const char **val = bindings_get(bindings, p);
-                strcpy(out_p, (val && *val) ? *val : p);
+                strncpy(out_p, (val && *val) ? *val : p, max_p - 1);
             } else {
-                strcpy(out_p, p);
+                strncpy(out_p, p, max_p - 1);
             }
+            out_p[max_p - 1] = '\0';
         }
-        if (out_o) {
+        if (out_o && max_o > 0) {
             if (o[0] == '?') {
                 const char **val = bindings_get(bindings, o);
-                strcpy(out_o, (val && *val) ? *val : o);
+                strncpy(out_o, (val && *val) ? *val : o, max_o - 1);
             } else {
-                strcpy(out_o, o);
+                strncpy(out_o, o, max_o - 1);
             }
+            out_o[max_o - 1] = '\0';
         }
     }
     facts_with_cursor_destroy(&c);
@@ -107,7 +110,8 @@ static int match_and_extract(s_linda_space *space, const char *s, const char *p,
     return found;
 }
 
-int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p, char *out_o)
+int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+             size_t max_p, char *out_o, size_t max_o)
 {
     if (!space || !s || !p || !o)
         return -1;
@@ -115,7 +119,7 @@ int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, 
     pthread_mutex_lock(&space->lock);
 
     while (1) {
-        if (match_and_extract(space, s, p, o, out_s, out_p, out_o)) {
+        if (match_and_extract(space, s, p, o, out_s, max_s, out_p, max_p, out_o, max_o)) {
             pthread_mutex_unlock(&space->lock);
             return 0;
         }
@@ -123,7 +127,8 @@ int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, 
     }
 }
 
-int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p, char *out_o)
+int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+             size_t max_p, char *out_o, size_t max_o)
 {
     if (!space || !s || !p || !o)
         return -1;
@@ -132,13 +137,19 @@ int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, 
 
     while (1) {
         char match_s[256], match_p[256], match_o[256];
-        if (match_and_extract(space, s, p, o, match_s, match_p, match_o)) {
-            if (out_s)
-                strcpy(out_s, match_s);
-            if (out_p)
-                strcpy(out_p, match_p);
-            if (out_o)
-                strcpy(out_o, match_o);
+        if (match_and_extract(space, s, p, o, match_s, sizeof(match_s), match_p, sizeof(match_p), match_o, sizeof(match_o))) {
+            if (out_s && max_s > 0) {
+                strncpy(out_s, match_s, max_s - 1);
+                out_s[max_s - 1] = '\0';
+            }
+            if (out_p && max_p > 0) {
+                strncpy(out_p, match_p, max_p - 1);
+                out_p[max_p - 1] = '\0';
+            }
+            if (out_o && max_o > 0) {
+                strncpy(out_o, match_o, max_o - 1);
+                out_o[max_o - 1] = '\0';
+            }
 
             facts_transaction_begin(space->db);
             facts_remove_spo(space->db, match_s, match_p, match_o);
@@ -151,32 +162,40 @@ int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, 
     }
 }
 
-int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p, char *out_o)
+int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+              size_t max_p, char *out_o, size_t max_o)
 {
     if (!space || !s || !p || !o)
         return -1;
 
     pthread_mutex_lock(&space->lock);
-    int found = match_and_extract(space, s, p, o, out_s, out_p, out_o);
+    int found = match_and_extract(space, s, p, o, out_s, max_s, out_p, max_p, out_o, max_o);
     pthread_mutex_unlock(&space->lock);
     return found;
 }
 
-int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p, char *out_o)
+int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+              size_t max_p, char *out_o, size_t max_o)
 {
     if (!space || !s || !p || !o)
         return -1;
 
     pthread_mutex_lock(&space->lock);
     char match_s[256], match_p[256], match_o[256];
-    int found = match_and_extract(space, s, p, o, match_s, match_p, match_o);
+    int found = match_and_extract(space, s, p, o, match_s, sizeof(match_s), match_p, sizeof(match_p), match_o, sizeof(match_o));
     if (found) {
-        if (out_s)
-            strcpy(out_s, match_s);
-        if (out_p)
-            strcpy(out_p, match_p);
-        if (out_o)
-            strcpy(out_o, match_o);
+        if (out_s && max_s > 0) {
+            strncpy(out_s, match_s, max_s - 1);
+            out_s[max_s - 1] = '\0';
+        }
+        if (out_p && max_p > 0) {
+            strncpy(out_p, match_p, max_p - 1);
+            out_p[max_p - 1] = '\0';
+        }
+        if (out_o && max_o > 0) {
+            strncpy(out_o, match_o, max_o - 1);
+            out_o[max_o - 1] = '\0';
+        }
 
         facts_transaction_begin(space->db);
         facts_remove_spo(space->db, match_s, match_p, match_o);

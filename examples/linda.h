@@ -25,16 +25,20 @@ void delete_linda_space(s_linda_space *space);
 int linda_out(s_linda_space *space, const char *s, const char *p, const char *o);
 
 /* Linda rd(S, P, O, out_s, out_p, out_o) - Blocking read of a matching tuple */
-int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p, char *out_o);
+int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+             size_t max_p, char *out_o, size_t max_o);
 
 /* Linda in(S, P, O, out_s, out_p, out_o) - Blocking read and consume of a matching tuple */
-int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p, char *out_o);
+int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+             size_t max_p, char *out_o, size_t max_o);
 
 /* Linda rdp(S, P, O, out_s, out_p, out_o) - Non-blocking read (returns 1 if found, 0 if not) */
-int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p, char *out_o);
+int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+              size_t max_p, char *out_o, size_t max_o);
 
 /* Linda inp(S, P, O, out_s, out_p, out_o) - Non-blocking consume (returns 1 if found, 0 if not) */
-int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, char *out_p, char *out_o);
+int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+              size_t max_p, char *out_o, size_t max_o);
 
 /* Linda eval() worker function type */
 typedef void *(*f_linda_worker)(void *arg);

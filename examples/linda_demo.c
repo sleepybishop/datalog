@@ -20,7 +20,7 @@ static void *consumer_thread(void *arg)
     char id[256] = {0};
     char action[256] = {0};
     printf("[Consumer] Blocking on in('task', '?Id', '?Action')...\n");
-    int rc = linda_in(space, "task", "?Id", "?Action", NULL, id, action);
+    int rc = linda_in(space, "task", "?Id", "?Action", NULL, 0, id, sizeof(id), action, sizeof(action));
     assert(rc == 0);
     printf("[Consumer] Woke up! Retrieved tuple: ('task', '%s', '%s')\n", id, action);
     return NULL;
@@ -57,22 +57,22 @@ int main()
 
     char val[256] = {0};
     printf("[Main] Blocking on rd('result', '9', '?Val')...\n");
-    int rc = linda_rd(space, "result", "9", "?Val", NULL, NULL, val);
+    int rc = linda_rd(space, "result", "9", "?Val", NULL, 0, NULL, 0, val, sizeof(val));
     assert(rc == 0);
     printf("[Main] Found result! 9 squared = %s\n", val);
 
     // 3. Non-blocking checking: rdp/inp
     printf("\n[Main] Checking non-blocking rdp...\n");
-    int found = linda_rdp(space, "result", "9", "81", NULL, NULL, NULL);
+    int found = linda_rdp(space, "result", "9", "81", NULL, 0, NULL, 0, NULL, 0);
     printf("[Main] rdp('result', '9', '81') found = %d (expected 1)\n", found);
     assert(found == 1);
 
     printf("[Main] Consuming result via non-blocking inp...\n");
-    found = linda_inp(space, "result", "9", "81", NULL, NULL, NULL);
+    found = linda_inp(space, "result", "9", "81", NULL, 0, NULL, 0, NULL, 0);
     printf("[Main] inp('result', '9', '81') found/consumed = %d (expected 1)\n", found);
     assert(found == 1);
 
-    found = linda_rdp(space, "result", "9", "81", NULL, NULL, NULL);
+    found = linda_rdp(space, "result", "9", "81", NULL, 0, NULL, 0, NULL, 0);
     printf("[Main] Second rdp('result', '9', '81') found = %d (expected 0)\n", found);
     assert(found == 0);
 
