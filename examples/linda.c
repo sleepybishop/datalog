@@ -5,6 +5,17 @@
 #include <string.h>
 #include <stdio.h>
 
+static unsigned int get_linda_cond_idx(const char *s)
+{
+    if (!s || s[0] == '?')
+        return 0;
+    unsigned int hash = 5381;
+    int c;
+    while ((c = *s++))
+        hash = ((hash << 5) + hash) + c;
+    return 1 + (hash % (LINDA_COND_PARTITIONS - 1));
+}
+
 s_linda_space *new_linda_space(unsigned long max_symbols)
 {
     s_linda_space *space = malloc(sizeof(s_linda_space));
@@ -30,11 +41,15 @@ s_linda_space *new_linda_space(unsigned long max_symbols)
         return NULL;
     }
 
-    if (pthread_cond_init(&space->cond, NULL) != 0) {
-        pthread_mutex_destroy(&space->lock);
-        delete_facts(space->db);
-        free(space);
-        return NULL;
+    for (int i = 0; i < LINDA_COND_PARTITIONS; i++) {
+        if (pthread_cond_init(&space->conds[i], NULL) != 0) {
+            for (int j = 0; j < i; j++)
+                pthread_cond_destroy(&space->conds[j]);
+            pthread_mutex_destroy(&space->lock);
+            delete_facts(space->db);
+            free(space);
+            return NULL;
+        }
     }
 
     return space;
@@ -45,7 +60,9 @@ void delete_linda_space(s_linda_space *space)
     if (!space)
         return;
 
-    pthread_cond_destroy(&space->cond);
+    for (int i = 0; i < LINDA_COND_PARTITIONS; i++) {
+        pthread_cond_destroy(&space->conds[i]);
+    }
     pthread_mutex_destroy(&space->lock);
     delete_facts(space->db);
     free(space);
@@ -62,7 +79,11 @@ int linda_out(s_linda_space *space, const char *s, const char *p, const char *o)
     facts_add_spo(space->db, s, p, o);
     facts_transaction_commit(space->db);
 
-    pthread_cond_broadcast(&space->cond);
+    unsigned int idx = get_linda_cond_idx(s);
+    pthread_cond_broadcast(&space->conds[idx]);
+    if (idx != 0) {
+        pthread_cond_broadcast(&space->conds[0]);
+    }
 
     pthread_mutex_unlock(&space->lock);
     return 0;
@@ -123,7 +144,7 @@ int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, 
             pthread_mutex_unlock(&space->lock);
             return 0;
         }
-        pthread_cond_wait(&space->cond, &space->lock);
+        pthread_cond_wait(&space->conds[get_linda_cond_idx(s)], &space->lock);
     }
 }
 
@@ -158,7 +179,7 @@ int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, 
             pthread_mutex_unlock(&space->lock);
             return 0;
         }
-        pthread_cond_wait(&space->cond, &space->lock);
+        pthread_cond_wait(&space->conds[get_linda_cond_idx(s)], &space->lock);
     }
 }
 

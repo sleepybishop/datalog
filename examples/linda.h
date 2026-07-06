@@ -8,11 +8,13 @@
  * Linda Coordination Tuplespace wrapper.
  * Integrates with our facts database and provides thread-safe concurrent coordination.
  */
+#define LINDA_COND_PARTITIONS 64
+
 typedef struct {
     s_facts *db;
     s_intern *sym;
     pthread_mutex_t lock;
-    pthread_cond_t cond;
+    pthread_cond_t conds[LINDA_COND_PARTITIONS];
 } s_linda_space;
 
 /* Allocate and initialize a new Linda Tuplespace */
