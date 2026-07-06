@@ -350,6 +350,14 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         return -1;
 
     size_t total_derived = 0;
+    s_facts *cumulative_delta_db = new_facts(facts->symbols, 100000);
+
+    for (size_t i = 0; i < delta_count; i++) {
+        if (delta[i].action == ROLLBACK_REMOVE) {
+            facts_add_spo(cumulative_delta_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
+                          symbol_to_str(delta[i].fact.o));
+        }
+    }
 
     for (int s = 0; s < num_strata; s++) {
         const char **idb_preds = NULL;
@@ -368,12 +376,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         s_facts *new_db = new_facts(facts->symbols, 100000);
         s_facts *old_plus_delta_db = new_facts(facts->symbols, 100000);
 
-        for (size_t i = 0; i < delta_count; i++) {
-            if (delta[i].action == ROLLBACK_REMOVE) {
-                facts_add_spo(delta_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
-                              symbol_to_str(delta[i].fact.o));
-            }
-        }
+        facts_merge_count(delta_db, cumulative_delta_db);
 
         if (facts_count(delta_db) == 0) {
             delete_facts(old_db);
@@ -455,6 +458,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
             facts_merge_count(old_db, delta_db);
             facts_reset(delta_db);
             facts_merge_count(delta_db, new_db);
+            facts_merge_count(cumulative_delta_db, new_db);
             total_derived += facts_merge_count(facts, new_db);
         }
 
@@ -464,6 +468,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         delete_facts(old_plus_delta_db);
         free(idb_preds);
     }
+    delete_facts(cumulative_delta_db);
     free(rule_strata);
     return (int)total_derived;
 }
