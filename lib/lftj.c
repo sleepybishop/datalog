@@ -517,18 +517,30 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
     return solutions;
 }
 
-static int naive_solve_rec(s_facts *main_facts, s_facts **dbs, s_spec_fact *subgoals, int subgoal_count, int current_subgoal, s_binding *bindings, void (*cb)(s_binding *bindings, void *user_data), void *user_data) {
+static int naive_solve_rec(s_facts *main_facts, s_facts **dbs, s_spec_fact *subgoals, int subgoal_count, int current_subgoal,
+                           s_binding *bindings, void (*cb)(s_binding *bindings, void *user_data), void *user_data)
+{
     if (current_subgoal == subgoal_count) {
-        if (cb) cb(bindings, user_data);
+        if (cb)
+            cb(bindings, user_data);
         return 1;
     }
     s_spec_fact *sub = &subgoals[current_subgoal];
     s_facts *db = dbs[current_subgoal] ? dbs[current_subgoal] : main_facts;
     int solutions = 0;
-    const char *s_val = sub->s && sub->s[0] == '?' ? (bindings_get(bindings, sub->s) && *bindings_get(bindings, sub->s) ? *bindings_get(bindings, sub->s) : sub->s) : sub->s;
-    const char *p_val = sub->p && sub->p[0] == '?' ? (bindings_get(bindings, sub->p) && *bindings_get(bindings, sub->p) ? *bindings_get(bindings, sub->p) : sub->p) : sub->p;
-    const char *o_val = sub->o && sub->o[0] == '?' ? (bindings_get(bindings, sub->o) && *bindings_get(bindings, sub->o) ? *bindings_get(bindings, sub->o) : sub->o) : sub->o;
-    
+    const char *s_val =
+        sub->s && sub->s[0] == '?'
+            ? (bindings_get(bindings, sub->s) && *bindings_get(bindings, sub->s) ? *bindings_get(bindings, sub->s) : sub->s)
+            : sub->s;
+    const char *p_val =
+        sub->p && sub->p[0] == '?'
+            ? (bindings_get(bindings, sub->p) && *bindings_get(bindings, sub->p) ? *bindings_get(bindings, sub->p) : sub->p)
+            : sub->p;
+    const char *o_val =
+        sub->o && sub->o[0] == '?'
+            ? (bindings_get(bindings, sub->o) && *bindings_get(bindings, sub->o) ? *bindings_get(bindings, sub->o) : sub->o)
+            : sub->o;
+
     s_facts_cursor fc;
     const char *cs = (s_val && s_val[0] != '?') ? s_val : NULL;
     const char *cp = (p_val && p_val[0] != '?') ? p_val : NULL;
@@ -539,20 +551,35 @@ static int naive_solve_rec(s_facts *main_facts, s_facts **dbs, s_spec_fact *subg
         const char *fs = symbol_to_str(f->s);
         const char *fp = symbol_to_str(f->p);
         const char *fo = symbol_to_str(f->o);
-        if (cs && strcmp(cs, fs) != 0) continue;
-        if (cp && strcmp(cp, fp) != 0) continue;
-        if (co && strcmp(co, fo) != 0) continue;
-        
+        if (cs && strcmp(cs, fs) != 0)
+            continue;
+        if (cp && strcmp(cp, fp) != 0)
+            continue;
+        if (co && strcmp(co, fo) != 0)
+            continue;
+
         const char *old_s = NULL, *old_p = NULL, *old_o = NULL;
-        if (sub->s && sub->s[0] == '?') { old_s = *bindings_get(bindings, sub->s); *bindings_get(bindings, sub->s) = fs; }
-        if (sub->p && sub->p[0] == '?') { old_p = *bindings_get(bindings, sub->p); *bindings_get(bindings, sub->p) = fp; }
-        if (sub->o && sub->o[0] == '?') { old_o = *bindings_get(bindings, sub->o); *bindings_get(bindings, sub->o) = fo; }
-        
+        if (sub->s && sub->s[0] == '?') {
+            old_s = *bindings_get(bindings, sub->s);
+            *bindings_get(bindings, sub->s) = fs;
+        }
+        if (sub->p && sub->p[0] == '?') {
+            old_p = *bindings_get(bindings, sub->p);
+            *bindings_get(bindings, sub->p) = fp;
+        }
+        if (sub->o && sub->o[0] == '?') {
+            old_o = *bindings_get(bindings, sub->o);
+            *bindings_get(bindings, sub->o) = fo;
+        }
+
         solutions += naive_solve_rec(main_facts, dbs, subgoals, subgoal_count, current_subgoal + 1, bindings, cb, user_data);
-        
-        if (sub->s && sub->s[0] == '?') *bindings_get(bindings, sub->s) = old_s;
-        if (sub->p && sub->p[0] == '?') *bindings_get(bindings, sub->p) = old_p;
-        if (sub->o && sub->o[0] == '?') *bindings_get(bindings, sub->o) = old_o;
+
+        if (sub->s && sub->s[0] == '?')
+            *bindings_get(bindings, sub->s) = old_s;
+        if (sub->p && sub->p[0] == '?')
+            *bindings_get(bindings, sub->p) = old_p;
+        if (sub->o && sub->o[0] == '?')
+            *bindings_get(bindings, sub->o) = old_o;
     }
     facts_cursor_stop(&fc);
     return solutions;

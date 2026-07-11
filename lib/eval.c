@@ -414,7 +414,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                 }
             }
         }
-        
+
         if (facts_count(new_db) > 0) {
             s_facts_cursor fc;
             facts_cursor_init(new_db, &fc, new_db->index_spo, NULL, NULL);
@@ -423,7 +423,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                 facts_remove_spo(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o));
             }
             facts_cursor_stop(&fc);
-            
+
             facts_merge_count(delta_db, new_db);
             facts_reset(new_db);
         }
@@ -559,7 +559,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                 }
             }
         }
-        
+
         if (facts_count(new_db) > 0) {
             s_facts_cursor fc;
             facts_cursor_init(new_db, &fc, new_db->index_spo, NULL, NULL);
@@ -568,7 +568,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                 facts_add_spo(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o));
             }
             facts_cursor_stop(&fc);
-            
+
             facts_merge_count(delta_db, new_db);
             facts_merge_count(cumulative_delta_db, new_db);
             facts_reset(new_db);

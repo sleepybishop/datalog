@@ -345,7 +345,7 @@ int facts_remove_fact(s_facts *facts, s_fact *f)
             transaction_release_writer(&facts->tx, has_lock);
             return 1;
         }
-        
+
         set_remove(&facts->index, si);
         if (facts->log)
             write_fact_log("remove", found, facts->log);
