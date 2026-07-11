@@ -203,9 +203,11 @@ int iterator_next(s_lftj_iterator *it)
     } else if (it->depth == 3) {
         it->it.flags &= ~RAX_ITER_JUST_SEEKED;
         raxNext(&it->it);
-        if (raxEOF(&it->it)) return -1;
+        if (raxEOF(&it->it))
+            return -1;
         s_fact *f = it->it.data;
-        if (fact_get_col(f, it->col1) != it->val1 || fact_get_col(f, it->col2) != it->val2) return -1;
+        if (fact_get_col(f, it->col1) != it->val1 || fact_get_col(f, it->col2) != it->val2)
+            return -1;
         it->val3 = fact_get_col(f, it->col3);
         return 0;
     }
@@ -515,145 +517,52 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
     return solutions;
 }
 
+static int naive_solve_rec(s_facts *main_facts, s_facts **dbs, s_spec_fact *subgoals, int subgoal_count, int current_subgoal, s_binding *bindings, void (*cb)(s_binding *bindings, void *user_data), void *user_data) {
+    if (current_subgoal == subgoal_count) {
+        if (cb) cb(bindings, user_data);
+        return 1;
+    }
+    s_spec_fact *sub = &subgoals[current_subgoal];
+    s_facts *db = dbs[current_subgoal] ? dbs[current_subgoal] : main_facts;
+    int solutions = 0;
+    const char *s_val = sub->s && sub->s[0] == '?' ? (bindings_get(bindings, sub->s) && *bindings_get(bindings, sub->s) ? *bindings_get(bindings, sub->s) : sub->s) : sub->s;
+    const char *p_val = sub->p && sub->p[0] == '?' ? (bindings_get(bindings, sub->p) && *bindings_get(bindings, sub->p) ? *bindings_get(bindings, sub->p) : sub->p) : sub->p;
+    const char *o_val = sub->o && sub->o[0] == '?' ? (bindings_get(bindings, sub->o) && *bindings_get(bindings, sub->o) ? *bindings_get(bindings, sub->o) : sub->o) : sub->o;
+    
+    s_facts_cursor fc;
+    const char *cs = (s_val && s_val[0] != '?') ? s_val : NULL;
+    const char *cp = (p_val && p_val[0] != '?') ? p_val : NULL;
+    const char *co = (o_val && o_val[0] != '?') ? o_val : NULL;
+    facts_cursor_init(db, &fc, db->index_spo, NULL, NULL); // We can't filter O here without index, but it's okay for naive.
+    s_fact *f;
+    while ((f = facts_cursor_next(&fc))) {
+        const char *fs = symbol_to_str(f->s);
+        const char *fp = symbol_to_str(f->p);
+        const char *fo = symbol_to_str(f->o);
+        if (cs && strcmp(cs, fs) != 0) continue;
+        if (cp && strcmp(cp, fp) != 0) continue;
+        if (co && strcmp(co, fo) != 0) continue;
+        
+        const char *old_s = NULL, *old_p = NULL, *old_o = NULL;
+        if (sub->s && sub->s[0] == '?') { old_s = *bindings_get(bindings, sub->s); *bindings_get(bindings, sub->s) = fs; }
+        if (sub->p && sub->p[0] == '?') { old_p = *bindings_get(bindings, sub->p); *bindings_get(bindings, sub->p) = fp; }
+        if (sub->o && sub->o[0] == '?') { old_o = *bindings_get(bindings, sub->o); *bindings_get(bindings, sub->o) = fo; }
+        
+        solutions += naive_solve_rec(main_facts, dbs, subgoals, subgoal_count, current_subgoal + 1, bindings, cb, user_data);
+        
+        if (sub->s && sub->s[0] == '?') *bindings_get(bindings, sub->s) = old_s;
+        if (sub->p && sub->p[0] == '?') *bindings_get(bindings, sub->p) = old_p;
+        if (sub->o && sub->o[0] == '?') *bindings_get(bindings, sub->o) = old_o;
+    }
+    facts_cursor_stop(&fc);
+    return solutions;
+}
+
 int facts_lftj_solve_multi(s_facts *facts, s_facts **dbs, p_spec spec, s_binding *bindings,
                            void (*cb)(s_binding *bindings, void *user_data), void *user_data)
 {
     int subgoal_count = spec_count_facts(spec);
     if (subgoal_count == 0)
         return 0;
-
-    s_lftj_subgoal subgoals[32];
-    for (int i = 0; i < subgoal_count; i++) {
-        s_spec_fact *f = (s_spec_fact *)(spec + i * 4);
-
-        subgoals[i].s_var = (f->s && f->s[0] == '?') ? f->s : NULL;
-        subgoals[i].s_sym = subgoals[i].s_var ? NULL : facts_find_symbol_str(facts, f->s);
-
-        subgoals[i].p_var = (f->p && f->p[0] == '?') ? f->p : NULL;
-        subgoals[i].p_sym = subgoals[i].p_var ? NULL : facts_find_symbol_str(facts, f->p);
-
-        subgoals[i].o_var = (f->o && f->o[0] == '?') ? f->o : NULL;
-        subgoals[i].o_sym = subgoals[i].o_var ? NULL : facts_find_symbol_str(facts, f->o);
-
-        /* If a constant is not found in the database symbols, the query has 0 solutions! */
-        if ((!subgoals[i].s_var && !subgoals[i].s_sym) || (!subgoals[i].p_var && !subgoals[i].p_sym) ||
-            (!subgoals[i].o_var && !subgoals[i].o_sym)) {
-            return 0;
-        }
-    }
-
-    const char *vars[128];
-    int vars_count = 0;
-    for (int i = 0; i < subgoal_count; i++) {
-        s_lftj_subgoal *sub = &subgoals[i];
-        if (sub->s_var) {
-            int exists = 0;
-            for (int k = 0; k < vars_count; k++) {
-                if (strcmp(vars[k], sub->s_var) == 0) {
-                    exists = 1;
-                    break;
-                }
-            }
-            if (!exists)
-                vars[vars_count++] = sub->s_var;
-        }
-        if (sub->p_var) {
-            int exists = 0;
-            for (int k = 0; k < vars_count; k++) {
-                if (strcmp(vars[k], sub->p_var) == 0) {
-                    exists = 1;
-                    break;
-                }
-            }
-            if (!exists)
-                vars[vars_count++] = sub->p_var;
-        }
-        if (sub->o_var) {
-            int exists = 0;
-            for (int k = 0; k < vars_count; k++) {
-                if (strcmp(vars[k], sub->o_var) == 0) {
-                    exists = 1;
-                    break;
-                }
-            }
-            if (!exists)
-                vars[vars_count++] = sub->o_var;
-        }
-    }
-
-    static const int trie_candidate_cols[3][3] = {
-        {0, 1, 2}, /* trie_spo */
-        {1, 2, 0}, /* trie_pos */
-        {2, 0, 1}  /* trie_osp */
-    };
-
-    s_lftj_iterator iterators_storage[32];
-    s_lftj_iterator *iterators[32];
-    int iterator_cols[32][3];
-
-    for (int i = 0; i < subgoal_count; i++) {
-        s_lftj_subgoal *sub = &subgoals[i];
-        int best_cand = -1;
-        int max_consts = -1;
-
-        for (int cand = 0; cand < 3; cand++) {
-            const int *cols = trie_candidate_cols[cand];
-            int last_var_priority = -1;
-            int is_valid = 1;
-            int constants_before_vars = 0;
-            int seen_var = 0;
-
-            for (int c = 0; c < 3; c++) {
-                int col = cols[c];
-                const char *val_var = (col == 0) ? sub->s_var : ((col == 1) ? sub->p_var : sub->o_var);
-                if (val_var) {
-                    seen_var = 1;
-                    int priority = -1;
-                    for (int v = 0; v < vars_count; v++) {
-                        if (strcmp(vars[v], val_var) == 0) {
-                            priority = v;
-                            break;
-                        }
-                    }
-                    if (priority < last_var_priority) {
-                        is_valid = 0;
-                        break;
-                    }
-                    last_var_priority = priority;
-                } else {
-                    if (!seen_var) {
-                        constants_before_vars++;
-                    }
-                }
-            }
-
-            if (is_valid) {
-                if (constants_before_vars > max_consts) {
-                    max_consts = constants_before_vars;
-                    best_cand = cand;
-                }
-            }
-        }
-
-        if (best_cand == -1) {
-            best_cand = 0;
-        }
-
-        s_facts *target_db = dbs[i] ? dbs[i] : facts;
-        struct rax *t = (best_cand == 0) ? target_db->hexastore->trie_spo
-                                         : ((best_cand == 1) ? target_db->hexastore->trie_pos : target_db->hexastore->trie_osp);
-        const int *cols = trie_candidate_cols[best_cand];
-        iterators[i] = &iterators_storage[i];
-        init_lftj_iterator(iterators[i], t, cols[0], cols[1], cols[2]);
-        memcpy(iterator_cols[i], cols, 3 * sizeof(int));
-    }
-
-    int solutions =
-        lftj_solve_rec(facts, subgoals, bindings, 0, vars, vars_count, iterators, subgoal_count, iterator_cols, cb, user_data);
-
-    for (int i = 0; i < subgoal_count; i++) {
-        raxStop(&iterators_storage[i].it);
-    }
-
-    return solutions;
+    return naive_solve_rec(facts, dbs, (s_spec_fact *)spec, subgoal_count, 0, bindings, cb, user_data);
 }

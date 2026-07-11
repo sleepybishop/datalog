@@ -12,6 +12,7 @@ typedef struct eval_cb_data {
     s_facts *main_facts;
     size_t derived_count;
     int is_deletion;
+    int skip_negated_check_idx;
 } s_eval_cb_data;
 
 static const char *resolve_term(const char *term, s_binding *bindings)
@@ -32,7 +33,7 @@ static void eval_solution_cb(s_binding *bindings, void *user_data)
 
     /* Check negated subgoals first */
     for (size_t i = 0; i < rule->body_count; i++) {
-        if (rule->body[i].negated) {
+        if (rule->body[i].negated && (int)i != data->skip_negated_check_idx) {
             const char *s_val = resolve_term(rule->body[i].s, bindings);
             const char *p_val = resolve_term(rule->body[i].p, bindings);
             const char *o_val = resolve_term(rule->body[i].o, bindings);
@@ -124,11 +125,11 @@ static void add_pred_to_list_eval(const char ***list, size_t *count, const char 
     (*count)++;
 }
 
-static p_spec compile_positive_rule_body_to_spec(const s_datalog_rule *rule)
+static p_spec compile_rule_body_with_trigger(const s_datalog_rule *rule, int trigger_idx)
 {
     size_t pos_count = 0;
     for (size_t i = 0; i < rule->body_count; i++) {
-        if (!rule->body[i].negated) {
+        if (!rule->body[i].negated || (int)i == trigger_idx) {
             pos_count++;
         }
     }
@@ -139,7 +140,7 @@ static p_spec compile_positive_rule_body_to_spec(const s_datalog_rule *rule)
     assert(spec);
     size_t idx = 0;
     for (size_t i = 0; i < rule->body_count; i++) {
-        if (!rule->body[i].negated) {
+        if (!rule->body[i].negated || (int)i == trigger_idx) {
             spec[idx * 4] = rule->body[i].s;
             spec[idx * 4 + 1] = rule->body[i].p;
             spec[idx * 4 + 2] = rule->body[i].o;
@@ -194,7 +195,7 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
                 continue;
             const s_datalog_rule *rule = &prog->rules[r];
 
-            p_spec spec = compile_positive_rule_body_to_spec(rule);
+            p_spec spec = compile_rule_body_with_trigger(rule, -1);
             s_binding *bindings = spec_bindings(spec);
             s_facts *dbs[32];
 
@@ -219,6 +220,8 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
             cb_data.old_db = old_db;
             cb_data.main_facts = facts;
             cb_data.derived_count = 0;
+            cb_data.is_deletion = 0;
+            cb_data.skip_negated_check_idx = -1;
 
             facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
 
@@ -281,7 +284,7 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
 
                 /* Evaluate the rule version for each recursive subgoal */
                 for (int v = 0; v < recursive_subgoal_count; v++) {
-                    p_spec spec = compile_positive_rule_body_to_spec(rule);
+                    p_spec spec = compile_rule_body_with_trigger(rule, -1);
                     s_binding *bindings = spec_bindings(spec);
                     s_facts *dbs[32];
 
@@ -316,6 +319,7 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
                     cb_data.main_facts = facts;
                     cb_data.derived_count = 0;
                     cb_data.is_deletion = 0;
+                    cb_data.skip_negated_check_idx = -1;
 
                     facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
 
@@ -374,95 +378,138 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         }
     }
 
-    if (facts_count(cumulative_minus_db) > 0) {
-        for (int s = 0; s < num_strata; s++) {
-            s_facts *delta_db = new_facts(facts->symbols, 256);
-            s_facts *new_db = new_facts(facts->symbols, 256);
-            facts_merge_count(delta_db, cumulative_minus_db);
+    /* Phase 1: Deletions */
+    for (int s = 0; s < num_strata; s++) {
+        s_facts *delta_db = new_facts(facts->symbols, 256);
+        s_facts *new_db = new_facts(facts->symbols, 256);
+        facts_merge_count(delta_db, cumulative_minus_db);
 
-            if (facts_count(delta_db) == 0) {
-                delete_facts(delta_db);
-                delete_facts(new_db);
+        /* Negated insertions trigger deletions */
+        for (size_t r = 0; r < prog->rule_count; r++) {
+            if (rule_strata[r] != s)
                 continue;
-            }
-
-            while (1) {
-                facts_reset(new_db);
-                size_t iter_derived = 0;
-                for (size_t r = 0; r < prog->rule_count; r++) {
-                    if (rule_strata[r] != s)
-                        continue;
-                    const s_datalog_rule *rule = &prog->rules[r];
-
-                    int target_count = 0;
-                    int target_indices[32];
-                    for (size_t j = 0; j < rule->body_count; j++) {
-                        if (!rule->body[j].negated) {
-                            target_indices[target_count++] = (int)j;
+            const s_datalog_rule *rule = &prog->rules[r];
+            for (size_t j = 0; j < rule->body_count; j++) {
+                if (rule->body[j].negated) {
+                    p_spec spec = compile_rule_body_with_trigger(rule, (int)j);
+                    s_binding *bindings = spec_bindings(spec);
+                    s_facts *dbs[32];
+                    size_t pos_idx = 0;
+                    for (size_t k = 0; k < rule->body_count; k++) {
+                        if (!rule->body[k].negated || (int)k == (int)j) {
+                            dbs[pos_idx++] = (k == j) ? cumulative_delta_db : facts;
                         }
                     }
-                    if (target_count == 0)
-                        continue;
-
-                    for (int v = 0; v < target_count; v++) {
-                        p_spec spec = compile_positive_rule_body_to_spec(rule);
-                        s_binding *bindings = spec_bindings(spec);
-                        s_facts *dbs[32];
-
-                        size_t pos_idx = 0;
-                        for (size_t j = 0; j < rule->body_count; j++) {
-                            if (rule->body[j].negated)
-                                continue;
-
-                            int rec_idx = -1;
-                            for (int w = 0; w < target_count; w++) {
-                                if (target_indices[w] == (int)j) {
-                                    rec_idx = w;
-                                    break;
-                                }
-                            }
-                            if (rec_idx == v)
-                                dbs[pos_idx] = delta_db;
-                            else
-                                dbs[pos_idx] = facts;
-                            pos_idx++;
-                        }
-
-                        s_eval_cb_data cb_data;
-                        cb_data.target_db = new_db;
-                        cb_data.rule = rule;
-                        cb_data.old_db = new_db; /* Not used for deletions */
-                        cb_data.main_facts = facts;
-                        cb_data.derived_count = 0;
-                        cb_data.is_deletion = 1;
-
-                        facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
-                        iter_derived += cb_data.derived_count;
-                        free(spec);
-                        free(bindings);
-                    }
+                    s_eval_cb_data cb_data;
+                    cb_data.target_db = new_db;
+                    cb_data.rule = rule;
+                    cb_data.old_db = new_db;
+                    cb_data.main_facts = facts;
+                    cb_data.derived_count = 0;
+                    cb_data.is_deletion = 1;
+                    cb_data.skip_negated_check_idx = (int)j;
+                    facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
+                    free(spec);
+                    free(bindings);
                 }
-
-                if (iter_derived == 0)
-                    break;
-
-                s_facts_cursor fc;
-                facts_cursor_init(new_db, &fc, new_db->index_spo, NULL, NULL);
-                s_fact *f;
-                while ((f = facts_cursor_next(&fc))) {
-                    facts_remove_spo(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o));
-                }
-                facts_cursor_stop(&fc);
-
-                facts_reset(delta_db);
-                facts_merge_count(delta_db, new_db);
-                facts_merge_count(cumulative_minus_db, new_db);
             }
+        }
+        
+        if (facts_count(new_db) > 0) {
+            s_facts_cursor fc;
+            facts_cursor_init(new_db, &fc, new_db->index_spo, NULL, NULL);
+            s_fact *f;
+            while ((f = facts_cursor_next(&fc))) {
+                facts_remove_spo(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o));
+            }
+            facts_cursor_stop(&fc);
+            
+            facts_merge_count(delta_db, new_db);
+            facts_reset(new_db);
+        }
+
+        if (facts_count(delta_db) == 0) {
             delete_facts(delta_db);
             delete_facts(new_db);
+            continue;
         }
-    }
 
+        while (1) {
+            facts_reset(new_db);
+            size_t iter_derived = 0;
+            for (size_t r = 0; r < prog->rule_count; r++) {
+                if (rule_strata[r] != s)
+                    continue;
+                const s_datalog_rule *rule = &prog->rules[r];
+
+                int target_count = 0;
+                int target_indices[32];
+                for (size_t j = 0; j < rule->body_count; j++) {
+                    if (!rule->body[j].negated) {
+                        target_indices[target_count++] = (int)j;
+                    }
+                }
+                if (target_count == 0)
+                    continue;
+
+                for (int v = 0; v < target_count; v++) {
+                    p_spec spec = compile_rule_body_with_trigger(rule, -1);
+                    s_binding *bindings = spec_bindings(spec);
+                    s_facts *dbs[32];
+
+                    size_t pos_idx = 0;
+                    for (size_t j = 0; j < rule->body_count; j++) {
+                        if (rule->body[j].negated)
+                            continue;
+
+                        int rec_idx = -1;
+                        for (int w = 0; w < target_count; w++) {
+                            if (target_indices[w] == (int)j) {
+                                rec_idx = w;
+                                break;
+                            }
+                        }
+                        if (rec_idx == v)
+                            dbs[pos_idx] = delta_db;
+                        else
+                            dbs[pos_idx] = facts;
+                        pos_idx++;
+                    }
+
+                    s_eval_cb_data cb_data;
+                    cb_data.target_db = new_db;
+                    cb_data.rule = rule;
+                    cb_data.old_db = new_db; /* Not used for deletions */
+                    cb_data.main_facts = facts;
+                    cb_data.derived_count = 0;
+                    cb_data.is_deletion = 1;
+                    cb_data.skip_negated_check_idx = -1;
+
+                    facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
+                    iter_derived += cb_data.derived_count;
+                    free(spec);
+                    free(bindings);
+                }
+            }
+
+            if (iter_derived == 0)
+                break;
+
+            s_facts_cursor fc;
+            facts_cursor_init(new_db, &fc, new_db->index_spo, NULL, NULL);
+            s_fact *f;
+            while ((f = facts_cursor_next(&fc))) {
+                facts_remove_spo(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o));
+            }
+            facts_cursor_stop(&fc);
+
+            facts_reset(delta_db);
+            facts_merge_count(delta_db, new_db);
+            facts_merge_count(cumulative_minus_db, new_db);
+        }
+        delete_facts(delta_db);
+        delete_facts(new_db);
+    }
     for (int s = 0; s < num_strata; s++) {
         const char **idb_preds = NULL;
         size_t idb_preds_count = 0;
@@ -481,6 +528,51 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         s_facts *old_plus_delta_db = new_facts(facts->symbols, 256);
 
         facts_merge_count(delta_db, cumulative_delta_db);
+
+        /* Negated deletions trigger insertions */
+        for (size_t r = 0; r < prog->rule_count; r++) {
+            if (rule_strata[r] != s)
+                continue;
+            const s_datalog_rule *rule = &prog->rules[r];
+            for (size_t j = 0; j < rule->body_count; j++) {
+                if (rule->body[j].negated) {
+                    p_spec spec = compile_rule_body_with_trigger(rule, (int)j);
+                    s_binding *bindings = spec_bindings(spec);
+                    s_facts *dbs[32];
+                    size_t pos_idx = 0;
+                    for (size_t k = 0; k < rule->body_count; k++) {
+                        if (!rule->body[k].negated || (int)k == (int)j) {
+                            dbs[pos_idx++] = (k == j) ? cumulative_minus_db : facts;
+                        }
+                    }
+                    s_eval_cb_data cb_data;
+                    cb_data.target_db = new_db;
+                    cb_data.rule = rule;
+                    cb_data.old_db = new_db;
+                    cb_data.main_facts = facts;
+                    cb_data.derived_count = 0;
+                    cb_data.is_deletion = 0;
+                    cb_data.skip_negated_check_idx = (int)j;
+                    facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
+                    free(spec);
+                    free(bindings);
+                }
+            }
+        }
+        
+        if (facts_count(new_db) > 0) {
+            s_facts_cursor fc;
+            facts_cursor_init(new_db, &fc, new_db->index_spo, NULL, NULL);
+            s_fact *f;
+            while ((f = facts_cursor_next(&fc))) {
+                facts_add_spo(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o));
+            }
+            facts_cursor_stop(&fc);
+            
+            facts_merge_count(delta_db, new_db);
+            facts_merge_count(cumulative_delta_db, new_db);
+            facts_reset(new_db);
+        }
 
         if (facts_count(delta_db) == 0) {
             delete_facts(old_db);
@@ -518,7 +610,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                     continue;
 
                 for (int v = 0; v < target_count; v++) {
-                    p_spec spec = compile_positive_rule_body_to_spec(rule);
+                    p_spec spec = compile_rule_body_with_trigger(rule, -1);
                     s_binding *bindings = spec_bindings(spec);
                     s_facts *dbs[32];
 
@@ -549,6 +641,8 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                     cb_data.old_db = old_db;
                     cb_data.main_facts = facts;
                     cb_data.derived_count = 0;
+                    cb_data.is_deletion = 0;
+                    cb_data.skip_negated_check_idx = -1;
 
                     facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
                     iter_derived += cb_data.derived_count;
@@ -573,6 +667,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         delete_facts(old_plus_delta_db);
         free(idb_preds);
     }
+
     delete_facts(cumulative_delta_db);
     delete_facts(cumulative_minus_db);
     free(rule_strata);
