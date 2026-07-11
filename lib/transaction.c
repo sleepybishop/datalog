@@ -15,6 +15,7 @@ void transaction_init(s_transaction *tx)
     memset(&tx->owner, 0, sizeof(pthread_t));
     tx->listener = NULL;
     tx->listener_data = NULL;
+    urcu_init(&tx->rcu, 256);
 }
 
 void transaction_destroy(s_transaction *tx)
@@ -25,6 +26,7 @@ void transaction_destroy(s_transaction *tx)
     tx->rollback.entries = NULL;
     tx->rollback.capacity = 0;
     tx->rollback.size = 0;
+    urcu_destroy(&tx->rcu);
 }
 
 int transaction_begin(s_facts *facts, s_transaction *tx)
@@ -60,6 +62,7 @@ int transaction_commit(s_facts *facts, s_transaction *tx)
         }
         tx->rollback.size = 0;
         memset(&tx->owner, 0, sizeof(pthread_t));
+        urcu_gc(&tx->rcu);
         pthread_rwlock_unlock(&tx->rwlock);
     }
     return 0;
@@ -131,7 +134,7 @@ void transaction_acquire_reader(s_transaction *tx)
 {
     pthread_t self = pthread_self();
     if (!pthread_equal(tx->owner, self)) {
-        pthread_rwlock_rdlock(&tx->rwlock);
+        urcu_read_lock(&tx->rcu);
     }
 }
 
@@ -139,6 +142,6 @@ void transaction_release_reader(s_transaction *tx)
 {
     pthread_t self = pthread_self();
     if (!pthread_equal(tx->owner, self)) {
-        pthread_rwlock_unlock(&tx->rwlock);
+        urcu_read_unlock(&tx->rcu);
     }
 }

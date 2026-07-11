@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <stddef.h>
 #include "fact.h"
+#include "urcu.h"
 
 typedef struct facts s_facts;
 
@@ -29,6 +30,7 @@ typedef struct transaction {
     pthread_t owner;
     f_facts_tx_listener listener;
     void *listener_data;
+    urcu_t rcu;
 } s_transaction;
 
 void transaction_init(s_transaction *tx);

@@ -15,7 +15,8 @@ lib/facts.o\
 lib/spec.o\
 lib/rule.o\
 lib/eval.o\
-lib/magic.o
+lib/magic.o\
+lib/urcu.o
 
 
 
