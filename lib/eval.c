@@ -164,6 +164,9 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
         return -1;
     }
 
+    int old_disable = facts->disable_listener;
+    facts->disable_listener = 1;
+
     size_t total_derived = 0;
 
     for (int s = 0; s < num_strata; s++) {
@@ -351,6 +354,7 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
     }
 
     free(rule_strata);
+    facts->disable_listener = old_disable;
     return (int)total_derived;
 }
 

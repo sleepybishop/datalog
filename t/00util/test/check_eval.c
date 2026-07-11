@@ -124,6 +124,79 @@ START_TEST(test_eval_same_generation_cousins)
 }
 END_TEST
 
+START_TEST(test_eval_transitive_retraction)
+{
+    s_intern *sym = new_intern(1000);
+    s_facts *db = new_facts(sym, 1000);
+    db->prog = new_datalog_program();
+
+    const char *rules = "?X <grandparent> ?Z :- ?X <parent> ?Y, ?Y <parent> ?Z .\n"
+                        "?X <ancestor> ?Y :- ?X <parent> ?Y .\n"
+                        "?X <ancestor> ?Z :- ?X <parent> ?Y, ?Y <ancestor> ?Z .\n";
+
+    int parse_ret = datalog_program_parse_rules(db->prog, rules);
+    ck_assert_int_eq(0, parse_ret);
+
+    facts_transaction_begin(db);
+    facts_add_spo(db, "Alice", "parent", "Bob");
+    facts_add_spo(db, "Bob", "parent", "Charlie");
+    facts_transaction_commit(db);
+
+    ck_assert(facts_get_spo(db, "Alice", "grandparent", "Charlie"));
+    ck_assert(facts_get_spo(db, "Alice", "ancestor", "Charlie"));
+
+    /* retract Alice parent Bob */
+    facts_transaction_begin(db);
+    facts_remove_spo(db, "Alice", "parent", "Bob");
+    facts_transaction_commit(db);
+
+    ck_assert(!facts_get_spo(db, "Alice", "grandparent", "Charlie"));
+    ck_assert(!facts_get_spo(db, "Alice", "ancestor", "Charlie"));
+
+    delete_datalog_program(db->prog);
+    delete_facts(db);
+    delete_intern(sym);
+}
+END_TEST
+
+START_TEST(test_eval_reactive_negation)
+{
+    s_intern *sym = new_intern(1000);
+    s_facts *db = new_facts(sym, 1000);
+    db->prog = new_datalog_program();
+
+    const char *rules = "?X <can_fly> yes :- ?X <is_bird> yes, NOT( ?X <is_penguin> yes ) .\n";
+
+    int parse_ret = datalog_program_parse_rules(db->prog, rules);
+    ck_assert_int_eq(0, parse_ret);
+
+    /* Tweety is a bird */
+    facts_transaction_begin(db);
+    facts_add_spo(db, "Tweety", "is_bird", "yes");
+    facts_transaction_commit(db);
+
+    ck_assert(facts_get_spo(db, "Tweety", "can_fly", "yes"));
+
+    /* Tweety becomes a penguin */
+    facts_transaction_begin(db);
+    facts_add_spo(db, "Tweety", "is_penguin", "yes");
+    facts_transaction_commit(db);
+
+    ck_assert(!facts_get_spo(db, "Tweety", "can_fly", "yes"));
+
+    /* retract penguin status */
+    facts_transaction_begin(db);
+    facts_remove_spo(db, "Tweety", "is_penguin", "yes");
+    facts_transaction_commit(db);
+
+    ck_assert(facts_get_spo(db, "Tweety", "can_fly", "yes"));
+
+    delete_datalog_program(db->prog);
+    delete_facts(db);
+    delete_intern(sym);
+}
+END_TEST
+
 Suite *eval_suite(void)
 {
     Suite *s;
@@ -135,6 +208,8 @@ Suite *eval_suite(void)
     tcase_add_test(tc_core, test_eval_transitive_closure);
     tcase_add_test(tc_core, test_eval_stratified_negation);
     tcase_add_test(tc_core, test_eval_same_generation_cousins);
+    tcase_add_test(tc_core, test_eval_transitive_retraction);
+    tcase_add_test(tc_core, test_eval_reactive_negation);
 
     suite_add_tcase(s, tc_core);
     return s;

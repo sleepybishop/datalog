@@ -221,7 +221,9 @@ s_fact *facts_add_fact(s_facts *facts, s_fact *f)
     s_set_item *si = set_get(&facts->index, f, sizeof(Symbol) * 4);
     if (si) {
         found = (s_fact *)si->data;
-        found->proof_count++;
+        if (facts->disable_listener) {
+            found->proof_count++;
+        }
         transaction_release_writer(&facts->tx, has_lock);
         return found;
     }
@@ -340,7 +342,7 @@ int facts_remove_fact(s_facts *facts, s_fact *f)
     s_set_item *si = set_get(&facts->index, f, sizeof(Symbol) * 4);
     if (si) {
         found = (s_fact *)si->data;
-        if (found->proof_count > 1) {
+        if (facts->disable_listener && found->proof_count > 1) {
             found->proof_count--;
             transaction_release_writer(&facts->tx, has_lock);
             return 1;
