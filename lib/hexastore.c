@@ -41,13 +41,10 @@ s_hexastore *new_hexastore(void)
 {
     s_hexastore *h = malloc(sizeof(s_hexastore));
     if (h) {
-        h->arena = rax_arena_create(1024 * 1024); // 1 MB chunks
-        assert(h->arena);
-        g_rax_current_arena = h->arena;
+        h->arena = NULL;
         h->trie_spo = raxNew();
         h->trie_pos = raxNew();
         h->trie_osp = raxNew();
-        g_rax_current_arena = NULL;
     }
     return h;
 }
@@ -55,7 +52,9 @@ s_hexastore *new_hexastore(void)
 void delete_hexastore(s_hexastore *h)
 {
     if (h) {
-        rax_arena_destroy(h->arena);
+        raxFree(h->trie_spo);
+        raxFree(h->trie_pos);
+        raxFree(h->trie_osp);
         free(h);
     }
 }
@@ -63,7 +62,6 @@ void delete_hexastore(s_hexastore *h)
 void hexastore_insert(s_hexastore *h, s_fact *f)
 {
     unsigned char key[24];
-    g_rax_current_arena = h->arena;
 
     // SPO key
     encode_triple_key(key, f->s, f->p, f->o);
@@ -76,14 +74,11 @@ void hexastore_insert(s_hexastore *h, s_fact *f)
     // OSP key
     encode_triple_key(key, f->o, f->s, f->p);
     raxInsert(h->trie_osp, key, 24, f, NULL);
-
-    g_rax_current_arena = NULL;
 }
 
 void hexastore_remove(s_hexastore *h, s_fact *f)
 {
     unsigned char key[24];
-    g_rax_current_arena = h->arena;
 
     // SPO key
     encode_triple_key(key, f->s, f->p, f->o);
@@ -96,8 +91,6 @@ void hexastore_remove(s_hexastore *h, s_fact *f)
     // OSP key
     encode_triple_key(key, f->o, f->s, f->p);
     raxRemove(h->trie_osp, key, 24, NULL);
-
-    g_rax_current_arena = NULL;
 }
 
 #define raxPadding(nodesize) ((sizeof(void *) - (((nodesize) + 4) % sizeof(void *))) & (sizeof(void *) - 1))

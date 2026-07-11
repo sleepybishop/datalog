@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <math.h>
 #include "rax.h"
+#include "urcu.h"
 #include <assert.h>
 
 #ifdef DEBUG_ASSERTIONS
@@ -153,6 +154,26 @@ static inline void raxStackFree(raxStack *ts)
 /* Return the pointer to the first child pointer. */
 #define raxNodeFirstChildPtr(n) ((raxNode **)((n)->data + (n)->size + raxPadding((n)->size)))
 
+static inline raxNode *raxGetChild(rax *rax, raxNode **child_ptr)
+{
+    if (rax->urcu) {
+        return __atomic_load_n(child_ptr, __ATOMIC_ACQUIRE);
+    } else {
+        raxNode *c;
+        memcpy(&c, child_ptr, sizeof(c));
+        return c;
+    }
+}
+
+static inline void raxSetChild(rax *rax, raxNode **child_ptr, raxNode *child)
+{
+    if (rax->urcu) {
+        __atomic_store_n(child_ptr, child, __ATOMIC_RELEASE);
+    } else {
+        memcpy(child_ptr, &child, sizeof(child));
+    }
+}
+
 /* Return the current total size of the node. Note that the second line
  * computes the padding after the string of characters, needed in order to
  * save pointers to aligned addresses. */
@@ -185,10 +206,16 @@ raxNode *raxNewNode(rax *rax, size_t children, int datafield)
 /* Deallocate node */
 void raxFreeNode(rax *rax, raxNode *n)
 {
-    size_t usable;
-    rax_free_usable(n, &usable);
-    if (rax->alloc_size)
+    size_t usable = 0;
+    if (rax->alloc_size) {
+        usable = malloc_usable_size(n);
         *rax->alloc_size -= usable;
+    }
+    if (rax->urcu) {
+        urcu_retire((urcu_t *)rax->urcu, n, NULL);
+    } else {
+        rax_free(n);
+    }
 }
 
 /* Allocate a new rax and return its pointer. On out of memory the function
@@ -211,6 +238,7 @@ rax *raxNewWithMetadata(int metaSize, size_t *alloc_size)
     rax->numele = 0;
     rax->numnodes = 1;
     rax->alloc_size = alloc_size;
+    rax->urcu = NULL;
     if (rax->alloc_size)
         *rax->alloc_size += usable;
     rax->head = raxNewNode(rax, 0, 0);
@@ -228,14 +256,30 @@ rax *raxNewWithMetadata(int metaSize, size_t *alloc_size)
 raxNode *raxNodeRealloc(rax *rax, raxNode *n, size_t newsize)
 {
     size_t usable = 0, old_usable = 0;
-    raxNode *newn = rax_realloc_usable(n, newsize, &usable, &old_usable);
-    if (newn == NULL)
-        return NULL;
-    if (rax->alloc_size) {
-        *rax->alloc_size -= old_usable;
-        *rax->alloc_size += usable;
+    if (rax->urcu) {
+        raxNode *newn = rax_malloc_usable(newsize, &usable);
+        if (newn == NULL)
+            return NULL;
+        size_t old_size = raxNodeCurrentLength(n);
+        size_t copy_size = (old_size < newsize) ? old_size : newsize;
+        memcpy(newn, n, copy_size);
+        if (rax->alloc_size) {
+            old_usable = malloc_usable_size(n);
+            *rax->alloc_size -= old_usable;
+            *rax->alloc_size += usable;
+        }
+        urcu_retire((urcu_t *)rax->urcu, n, NULL);
+        return newn;
+    } else {
+        raxNode *newn = rax_realloc_usable(n, newsize, &usable, &old_usable);
+        if (newn == NULL)
+            return NULL;
+        if (rax->alloc_size) {
+            *rax->alloc_size -= old_usable;
+            *rax->alloc_size += usable;
+        }
+        return newn;
     }
-    return newn;
 }
 
 /* realloc the node to make room for auxiliary data in order
@@ -417,7 +461,7 @@ raxNode *raxAddChild(rax *rax, raxNode *n, unsigned char c, raxNode **childptr, 
     n->size++;
     src = (unsigned char *)raxNodeFirstChildPtr(n);
     raxNode **childfield = (raxNode **)(src + sizeof(raxNode *) * pos);
-    memcpy(childfield, &child, sizeof(child));
+    raxSetChild(rax, childfield, child);
     *childptr = child;
     *parentlink = childfield;
     return n;
@@ -464,7 +508,7 @@ raxNode *raxCompressNode(rax *rax, raxNode *n, unsigned char *s, size_t len, rax
     if (n->iskey)
         raxSetData(n, data);
     raxNode **childfield = raxNodeLastChildPtr(n);
-    memcpy(childfield, child, sizeof(*child));
+    raxSetChild(rax, childfield, *child);
     return n;
 }
 
@@ -500,7 +544,7 @@ raxNode *raxCompressNode(rax *rax, raxNode *n, unsigned char *s, size_t len, rax
 static inline size_t raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode ***plink, int *splitpos,
                                 raxStack *ts)
 {
-    raxNode *h = rax->head;
+    raxNode *h = rax->urcu ? __atomic_load_n(&rax->head, __ATOMIC_ACQUIRE) : rax->head;
     raxNode **parentlink = &rax->head;
 
     size_t i = 0; /* Position in the string. */
@@ -545,7 +589,7 @@ static inline size_t raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode 
         raxNode **children = raxNodeFirstChildPtr(h);
         if (h->iscompr)
             j = 0; /* Compressed node only child is at index 0. */
-        memcpy(&h, children + j, sizeof(h));
+        h = raxGetChild(rax, children + j);
         parentlink = children + j;
         j = 0; /* If the new node is non compressed and we do not
                   iterate again (since i == len) set the split
@@ -622,7 +666,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
         if (!h->iskey || h->isnull) {
             h = raxReallocForData(rax, h, data);
             if (h)
-                memcpy(parentlink, &h, sizeof(h));
+                raxSetChild(rax, parentlink, h);
         }
         if (h == NULL) {
             errno = ENOMEM;
@@ -778,8 +822,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
 
         /* 1: Save next pointer. */
         raxNode **childfield = raxNodeLastChildPtr(h);
-        raxNode *next;
-        memcpy(&next, childfield, sizeof(next));
+        raxNode *next = raxGetChild(rax, childfield);
         debugf("Next is %p\n", (void *)next);
         debugf("iskey %d\n", h->iskey);
         if (h->iskey) {
@@ -828,7 +871,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
                 void *ndata = raxGetData(h);
                 raxSetData(splitnode, ndata);
             }
-            memcpy(parentlink, &splitnode, sizeof(splitnode));
+            raxSetChild(rax, parentlink, splitnode);
         } else {
             /* 3b: Trim the compressed node. */
             trimmed->size = j;
@@ -841,8 +884,8 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
                 raxSetData(trimmed, ndata);
             }
             raxNode **cp = raxNodeLastChildPtr(trimmed);
-            memcpy(cp, &splitnode, sizeof(splitnode));
-            memcpy(parentlink, &trimmed, sizeof(trimmed));
+            raxSetChild(rax, cp, splitnode);
+            raxSetChild(rax, parentlink, trimmed);
             parentlink = cp; /* Set parentlink to splitnode parent. */
             rax->numnodes++;
         }
@@ -857,7 +900,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
             postfix->iscompr = postfixlen > 1;
             memcpy(postfix->data, h->data + j + 1, postfixlen);
             raxNode **cp = raxNodeLastChildPtr(postfix);
-            memcpy(cp, &next, sizeof(next));
+            raxSetChild(rax, cp, next);
             rax->numnodes++;
         } else {
             /* 4b: just use next as postfix node. */
@@ -866,7 +909,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
 
         /* 5: Set splitnode first child as the postfix node. */
         raxNode **splitchild = raxNodeLastChildPtr(splitnode);
-        memcpy(splitchild, &postfix, sizeof(postfix));
+        raxSetChild(rax, splitchild, postfix);
 
         /* 6. Continue insertion: this will cause the splitnode to
          * get a new child (the non common character at the currently
@@ -900,8 +943,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
 
         /* 1: Save next pointer. */
         raxNode **childfield = raxNodeLastChildPtr(h);
-        raxNode *next;
-        memcpy(&next, childfield, sizeof(next));
+        raxNode *next = raxGetChild(rax, childfield);
 
         /* 2: Create the postfix node. */
         postfix->size = postfixlen;
@@ -911,7 +953,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
         memcpy(postfix->data, h->data + j, postfixlen);
         raxSetData(postfix, data);
         raxNode **cp = raxNodeLastChildPtr(postfix);
-        memcpy(cp, &next, sizeof(next));
+        raxSetChild(rax, cp, next);
         rax->numnodes++;
 
         /* 3: Trim the compressed node. */
@@ -920,7 +962,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
         trimmed->iskey = 0;
         trimmed->isnull = 0;
         memcpy(trimmed->data, h->data, j);
-        memcpy(parentlink, &trimmed, sizeof(trimmed));
+        raxSetChild(rax, parentlink, trimmed);
         if (h->iskey) {
             void *aux = raxGetData(h);
             raxSetData(trimmed, aux);
@@ -929,7 +971,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
         /* Fix the trimmed node child pointer to point to
          * the postfix node. */
         cp = raxNodeLastChildPtr(trimmed);
-        memcpy(cp, &postfix, sizeof(postfix));
+        raxSetChild(rax, cp, postfix);
 
         /* Finish! We don't need to continue with the insertion
          * algorithm for ALGO 2. The key is already inserted. */
@@ -955,7 +997,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
             if (newh == NULL)
                 goto oom;
             h = newh;
-            memcpy(parentlink, &h, sizeof(h));
+            raxSetChild(rax, parentlink, h);
             parentlink = raxNodeLastChildPtr(h);
             i += comprsize;
         } else {
@@ -965,7 +1007,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
             if (newh == NULL)
                 goto oom;
             h = newh;
-            memcpy(parentlink, &h, sizeof(h));
+            raxSetChild(rax, parentlink, h);
             parentlink = new_parentlink;
             i++;
         }
@@ -979,7 +1021,7 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
     if (!h->iskey)
         rax->numele++;
     raxSetData(h, data);
-    memcpy(parentlink, &h, sizeof(h));
+    raxSetChild(rax, parentlink, h);
     return 1; /* Element inserted. */
 
 oom:
@@ -1113,8 +1155,7 @@ raxNode *raxRemoveChild(rax *rax, raxNode *parent, raxNode *child)
     /* 2. Search the child pointer to remove inside the array of children
      *    pointers. */
     while (1) {
-        raxNode *aux;
-        memcpy(&aux, c, sizeof(aux));
+        raxNode *aux = raxGetChild(rax, c);
         if (aux == child)
             break;
         c++;
@@ -1211,7 +1252,7 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old)
                 } else {
                     parentlink = raxFindParentLink(parent, h);
                 }
-                memcpy(parentlink, &new, sizeof(new));
+                raxSetChild(rax, parentlink, new);
             }
 
             /* If after the removal the node has just a single child
@@ -1298,7 +1339,7 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old)
         int nodes = 1;
         while (h->size != 0) {
             raxNode **cp = raxNodeLastChildPtr(h);
-            memcpy(&h, cp, sizeof(h));
+            h = raxGetChild(rax, cp);
             if (h->iskey || (!h->iscompr && h->size != 1))
                 break;
             /* Stop here if going to the next node would result into
@@ -1337,7 +1378,7 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old)
                 comprsize += h->size;
                 raxNode **cp = raxNodeLastChildPtr(h);
                 raxNode *tofree = h;
-                memcpy(&h, cp, sizeof(h));
+                h = raxGetChild(rax, cp);
                 raxFreeNode(rax, tofree);
                 rax->numnodes--;
                 if (h->iskey || (!h->iscompr && h->size != 1))
@@ -1348,14 +1389,14 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old)
             /* Now 'h' points to the first node that we still need to use,
              * so our new node child pointer will point to it. */
             raxNode **cp = raxNodeLastChildPtr(new);
-            memcpy(cp, &h, sizeof(h));
+            raxSetChild(rax, cp, h);
 
             /* Fix parent link. */
             if (parent) {
                 raxNode **parentlink = raxFindParentLink(parent, start);
-                memcpy(parentlink, &new, sizeof(new));
+                raxSetChild(rax, parentlink, new);
             } else {
-                rax->head = new;
+                raxSetChild(rax, &rax->head, new);
             }
 
             debugf("Compressed %d nodes, %d total bytes\n", nodes, (int)comprsize);
@@ -1527,11 +1568,11 @@ int raxIteratorNextStep(raxIterator *it, int noup)
             raxNode **cp = raxNodeFirstChildPtr(it->node);
             if (!raxIteratorAddChars(it, it->node->data, it->node->iscompr ? it->node->size : 1))
                 return 0;
-            memcpy(&it->node, cp, sizeof(it->node));
+            it->node = raxGetChild(it->rt, cp);
             /* Call the node callback if any, and replace the node pointer
              * if the callback returns true. */
             if (it->node_cb && it->node_cb(&it->node, it->privdata))
-                memcpy(cp, &it->node, sizeof(it->node));
+                raxSetChild(it->rt, cp, it->node);
             /* For "next" step, stop every time we find a key along the
              * way, since the key is lexicographically smaller compared to
              * what follows in the sub-children. */
@@ -1585,11 +1626,11 @@ int raxIteratorNextStep(raxIterator *it, int noup)
                         raxIteratorAddChars(it, it->node->data + i, 1);
                         if (!raxStackPush(&it->stack, it->node))
                             return 0;
-                        memcpy(&it->node, cp, sizeof(it->node));
+                        it->node = raxGetChild(it->rt, cp);
                         /* Call the node callback if any, and replace the node
                          * pointer if the callback returns true. */
                         if (it->node_cb && it->node_cb(&it->node, it->privdata))
-                            memcpy(cp, &it->node, sizeof(it->node));
+                            raxSetChild(it->rt, cp, it->node);
                         if (it->node->iskey) {
                             it->data = raxGetData(it->node);
                             return 1;
@@ -1618,7 +1659,7 @@ int raxSeekGreatest(raxIterator *it)
         raxNode **cp = raxNodeLastChildPtr(it->node);
         if (!raxStackPush(&it->stack, it->node))
             return 0;
-        memcpy(&it->node, cp, sizeof(it->node));
+        it->node = raxGetChild(it->rt, cp);
     }
     return 1;
 }
@@ -1687,7 +1728,7 @@ int raxIteratorPrevStep(raxIterator *it, int noup)
                     return 0;
                 if (!raxStackPush(&it->stack, it->node))
                     return 0;
-                memcpy(&it->node, cp, sizeof(it->node));
+                it->node = raxGetChild(it->rt, cp);
                 /* Seek sub-tree max. */
                 if (!raxSeekGreatest(it))
                     return 0;
@@ -1957,7 +1998,7 @@ int raxRandomWalk(raxIterator *it, size_t steps)
             raxNode **cp = raxNodeFirstChildPtr(n) + r;
             if (!raxStackPush(&it->stack, n))
                 return 0;
-            memcpy(&n, cp, sizeof(n));
+            n = raxGetChild(it->rt, cp);
         }
         if (n->iskey)
             steps--;

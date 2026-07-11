@@ -115,6 +115,7 @@ typedef struct rax {
     uint64_t numele;
     uint64_t numnodes;
     size_t *alloc_size;
+    void *urcu;
     void *metadata[];
 } rax;
 

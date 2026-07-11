@@ -67,6 +67,9 @@ void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
     facts->disable_listener = 0;
 
     transaction_init(&facts->tx);
+    facts->hexastore->trie_spo->urcu = &facts->tx.rcu;
+    facts->hexastore->trie_pos->urcu = &facts->tx.rcu;
+    facts->hexastore->trie_osp->urcu = &facts->tx.rcu;
     facts_register_tx_listener(facts, rete_tx_listener, NULL);
 }
 
@@ -96,6 +99,9 @@ void facts_reset(s_facts *facts)
     // 2. Destroy and recreate the hexastore index
     delete_hexastore(facts->hexastore);
     facts->hexastore = new_hexastore();
+    facts->hexastore->trie_spo->urcu = &facts->tx.rcu;
+    facts->hexastore->trie_pos->urcu = &facts->tx.rcu;
+    facts->hexastore->trie_osp->urcu = &facts->tx.rcu;
     facts->index_spo = facts->hexastore->trie_spo;
     facts->index_pos = facts->hexastore->trie_pos;
     facts->index_osp = facts->hexastore->trie_osp;
