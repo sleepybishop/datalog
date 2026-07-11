@@ -11,6 +11,7 @@ typedef struct eval_cb_data {
     s_facts *old_db;
     s_facts *main_facts;
     size_t derived_count;
+    int is_deletion;
 } s_eval_cb_data;
 
 static const char *resolve_term(const char *term, s_binding *bindings)
@@ -66,19 +67,28 @@ static void eval_solution_cb(s_binding *bindings, void *user_data)
         return;
     }
 
-    /* Check if the fact already exists in the main database, or in old_db, or in the target_db */
-    if (facts_get_spo(data->main_facts, s_val, p_val, o_val)) {
-        return;
-    }
-    if (facts_get_spo(data->old_db, s_val, p_val, o_val)) {
-        return;
-    }
-    if (facts_get_spo(data->target_db, s_val, p_val, o_val)) {
-        return;
+    if (data->is_deletion) {
+        /* During deletion, we WANT to find facts that exist in the main database so we can delete them.
+           But we still don't want to insert duplicates into target_db. */
+        if (facts_get_spo(data->target_db, s_val, p_val, o_val)) {
+            return;
+        }
+    } else {
+        /* Check if the fact already exists in the main database, or in old_db, or in the target_db */
+        if (facts_get_spo(data->main_facts, s_val, p_val, o_val)) {
+            return;
+        }
+        if (facts_get_spo(data->old_db, s_val, p_val, o_val)) {
+            return;
+        }
+        if (facts_get_spo(data->target_db, s_val, p_val, o_val)) {
+            return;
+        }
     }
 
     /* Insert new unique fact */
-    if (facts_add_spo(data->target_db, s_val, p_val, o_val)) {
+    if (data->target_db && facts_add_spo(data->target_db, s_val, p_val, o_val)) {
+        printf("DEBUG: eval_solution_cb derived %s %s %s\n", s_val, p_val, o_val);
         data->derived_count++;
     }
 }
@@ -305,6 +315,7 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
                     cb_data.old_db = old_db;
                     cb_data.main_facts = facts;
                     cb_data.derived_count = 0;
+                    cb_data.is_deletion = 0;
 
                     facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
 
@@ -351,11 +362,104 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 
     size_t total_derived = 0;
     s_facts *cumulative_delta_db = new_facts(facts->symbols, 256);
+    s_facts *cumulative_minus_db = new_facts(facts->symbols, 256);
 
     for (size_t i = 0; i < delta_count; i++) {
         if (delta[i].action == ROLLBACK_REMOVE) {
             facts_add_spo(cumulative_delta_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
                           symbol_to_str(delta[i].fact.o));
+        } else if (delta[i].action == ROLLBACK_ADD) {
+            facts_add_spo(cumulative_minus_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
+                          symbol_to_str(delta[i].fact.o));
+        }
+    }
+
+    if (facts_count(cumulative_minus_db) > 0) {
+        for (int s = 0; s < num_strata; s++) {
+            s_facts *delta_db = new_facts(facts->symbols, 256);
+            s_facts *new_db = new_facts(facts->symbols, 256);
+            facts_merge_count(delta_db, cumulative_minus_db);
+
+            if (facts_count(delta_db) == 0) {
+                delete_facts(delta_db);
+                delete_facts(new_db);
+                continue;
+            }
+
+            while (1) {
+                facts_reset(new_db);
+                size_t iter_derived = 0;
+                for (size_t r = 0; r < prog->rule_count; r++) {
+                    if (rule_strata[r] != s)
+                        continue;
+                    const s_datalog_rule *rule = &prog->rules[r];
+
+                    int target_count = 0;
+                    int target_indices[32];
+                    for (size_t j = 0; j < rule->body_count; j++) {
+                        if (!rule->body[j].negated) {
+                            target_indices[target_count++] = (int)j;
+                        }
+                    }
+                    if (target_count == 0)
+                        continue;
+
+                    for (int v = 0; v < target_count; v++) {
+                        p_spec spec = compile_positive_rule_body_to_spec(rule);
+                        s_binding *bindings = spec_bindings(spec);
+                        s_facts *dbs[32];
+
+                        size_t pos_idx = 0;
+                        for (size_t j = 0; j < rule->body_count; j++) {
+                            if (rule->body[j].negated)
+                                continue;
+
+                            int rec_idx = -1;
+                            for (int w = 0; w < target_count; w++) {
+                                if (target_indices[w] == (int)j) {
+                                    rec_idx = w;
+                                    break;
+                                }
+                            }
+                            if (rec_idx == v)
+                                dbs[pos_idx] = delta_db;
+                            else
+                                dbs[pos_idx] = facts;
+                            pos_idx++;
+                        }
+
+                        s_eval_cb_data cb_data;
+                        cb_data.target_db = new_db;
+                        cb_data.rule = rule;
+                        cb_data.old_db = new_db; /* Not used for deletions */
+                        cb_data.main_facts = facts;
+                        cb_data.derived_count = 0;
+                        cb_data.is_deletion = 1;
+
+                        facts_lftj_solve_multi(facts, dbs, spec, bindings, eval_solution_cb, &cb_data);
+                        iter_derived += cb_data.derived_count;
+                        free(spec);
+                        free(bindings);
+                    }
+                }
+
+                if (iter_derived == 0)
+                    break;
+
+                s_facts_cursor fc;
+                facts_cursor_init(new_db, &fc, new_db->index_spo, NULL, NULL);
+                s_fact *f;
+                while ((f = facts_cursor_next(&fc))) {
+                    facts_remove_spo(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o));
+                }
+                facts_cursor_stop(&fc);
+
+                facts_reset(delta_db);
+                facts_merge_count(delta_db, new_db);
+                facts_merge_count(cumulative_minus_db, new_db);
+            }
+            delete_facts(delta_db);
+            delete_facts(new_db);
         }
     }
 
@@ -388,6 +492,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         }
 
         facts_merge_count(old_db, delta_db);
+        printf("DEBUG: Stratum %d delta_db count=%lu facts count=%lu\n", s, facts_count(delta_db), facts_count(facts));
 
         while (1) {
             facts_reset(new_db);
@@ -469,6 +574,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         free(idb_preds);
     }
     delete_facts(cumulative_delta_db);
+    delete_facts(cumulative_minus_db);
     free(rule_strata);
     return (int)total_derived;
 }

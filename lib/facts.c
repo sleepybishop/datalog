@@ -218,9 +218,10 @@ s_fact *facts_add_fact(s_facts *facts, s_fact *f)
     assert(facts);
     assert(f);
     int has_lock = transaction_acquire_writer(&facts->tx);
-    s_set_item *si = set_get(&facts->index, f, sizeof(s_fact));
+    s_set_item *si = set_get(&facts->index, f, sizeof(Symbol) * 4);
     if (si) {
         found = (s_fact *)si->data;
+        found->proof_count++;
         transaction_release_writer(&facts->tx, has_lock);
         return found;
     }
@@ -228,11 +229,12 @@ s_fact *facts_add_fact(s_facts *facts, s_fact *f)
         write_fact_log("add", f, facts->log);
     new = new_fact(f->s, f->p, f->o);
     assert(new);
+    new->negated = f->negated;
     facts_intern(facts, symbol_to_str(new->s));
     facts_intern(facts, symbol_to_str(new->p));
     facts_intern(facts, symbol_to_str(new->o));
     hexastore_insert(facts->hexastore, new);
-    set_add(&facts->index, new, sizeof(s_fact));
+    set_add(&facts->index, new, sizeof(Symbol) * 4);
     facts_rollback_push(facts, ROLLBACK_REMOVE, new);
     transaction_release_writer(&facts->tx, has_lock);
     return new;
@@ -335,9 +337,15 @@ int facts_remove_fact(s_facts *facts, s_fact *f)
     assert(facts);
     assert(f);
     int has_lock = transaction_acquire_writer(&facts->tx);
-    s_set_item *si = set_get(&facts->index, f, sizeof(s_fact));
+    s_set_item *si = set_get(&facts->index, f, sizeof(Symbol) * 4);
     if (si) {
         found = (s_fact *)si->data;
+        if (found->proof_count > 1) {
+            found->proof_count--;
+            transaction_release_writer(&facts->tx, has_lock);
+            return 1;
+        }
+        
         set_remove(&facts->index, si);
         if (facts->log)
             write_fact_log("remove", found, facts->log);
@@ -416,7 +424,7 @@ s_fact *facts_get_fact(s_facts *facts, s_fact *f)
 {
     assert(facts);
     assert(f);
-    s_set_item *si = set_get(&facts->index, f, sizeof(s_fact));
+    s_set_item *si = set_get(&facts->index, f, sizeof(Symbol) * 4);
     if (si)
         return (s_fact *)si->data;
     return NULL;

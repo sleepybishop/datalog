@@ -16,6 +16,7 @@ typedef struct fact {
     Symbol p;
     Symbol o;
     Symbol negated;
+    size_t proof_count;
 } s_fact;
 
 typedef int (*f_fact)(s_fact *f);
