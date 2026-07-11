@@ -16,7 +16,8 @@ lib/spec.o\
 lib/rule.o\
 lib/eval.o\
 lib/magic.o\
-lib/urcu.o
+lib/urcu.o\
+lib/linda.o
 
 
 
@@ -32,7 +33,8 @@ t/00util/test/check_movie_integration\
 t/00util/test/check_sparql\
 t/00util/test/check_rule\
 t/00util/test/check_eval\
-t/00util/test/check_magic
+t/00util/test/check_magic\
+t/00util/test/check_linda
 
 
 
@@ -83,6 +85,8 @@ t/00util/test/check_rule: t/00util/test/check_rule.o $(OBJ)
 t/00util/test/check_eval: t/00util/test/check_eval.o $(OBJ)
 
 t/00util/test/check_magic: t/00util/test/check_magic.o $(OBJ)
+
+t/00util/test/check_linda: t/00util/test/check_linda.o $(OBJ)
 
 
 check: CFLAGS=-O0 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused

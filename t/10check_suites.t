@@ -27,7 +27,8 @@ subtest "check suites" => sub {
         "check_sparql",
         "check_rule",
         "check_eval",
-        "check_magic"
+        "check_magic",
+        "check_linda"
     );
     foreach (@suites) {
         is 0, run_suite($_), $_;
