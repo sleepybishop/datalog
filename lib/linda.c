@@ -99,7 +99,13 @@ static s_linda_entry *linda_entry_add(s_linda_space *space, const s_fact *fact, 
     entry->p = facts_intern(space->db, symbol_to_str(fact->p));
     entry->o = facts_intern(space->db, symbol_to_str(fact->o));
     entry->count = count;
-    set_add(&space->multiplicity, entry, LINDA_ENTRY_KEY_SIZE);
+    if (!set_add(&space->multiplicity, entry, LINDA_ENTRY_KEY_SIZE)) {
+        facts_unintern(space->db, entry->s);
+        facts_unintern(space->db, entry->p);
+        facts_unintern(space->db, entry->o);
+        free(entry);
+        return NULL;
+    }
     return entry;
 }
 
@@ -272,7 +278,18 @@ s_linda_space *new_linda_space(unsigned long max_symbols)
         }
     }
     pthread_condattr_destroy(&cond_attr);
-    set_init(&space->multiplicity, max_symbols);
+    if (set_init_checked(&space->multiplicity, max_symbols) != 0) {
+        for (size_t i = 0; i < LINDA_COND_PARTITIONS; i++) {
+            pthread_cond_destroy(&space->conds[i]);
+            pthread_mutex_destroy(&space->locks[i]);
+        }
+        pthread_cond_destroy(&space->worker_cond);
+        pthread_mutex_destroy(&space->worker_lock);
+        delete_facts(space->db);
+        delete_intern(space->sym);
+        free(space);
+        return NULL;
+    }
     facts_register_internal_commit_summary_observer(space->db, linda_commit_observer, space);
     return space;
 }
@@ -368,26 +385,29 @@ int linda_out(s_linda_space *space, const char *s, const char *p, const char *o)
 {
     if (!space || !s || !p || !o)
         return LINDA_ERROR;
+    int result = linda_operation_begin(space);
+    if (result != LINDA_OK)
+        return result;
     if (facts_transaction_begin(space->db) != 0)
-        return LINDA_ERROR;
+        goto error;
     s_fact_support support;
     int existed = facts_get_support_spo(space->db, s, p, o, &support);
     s_fact *fact = facts_add_spo(space->db, s, p, o);
     if (!fact) {
         facts_transaction_rollback(space->db);
-        return LINDA_ERROR;
+        goto error;
     }
     s_linda_entry *entry = linda_entry_get(space, fact);
     if (existed > 0 && support.asserted) {
         if (entry) {
             if (entry->count == SIZE_MAX) {
                 facts_transaction_rollback(space->db);
-                return LINDA_ERROR;
+                goto error;
             }
             entry->count++;
         } else if (!linda_entry_add(space, fact, 2)) {
             facts_transaction_rollback(space->db);
-            return LINDA_ERROR;
+            goto error;
         }
     } else if (entry) {
         /* Discard stale overlay state left by unsupported direct DB mutation. */
@@ -395,11 +415,16 @@ int linda_out(s_linda_space *space, const char *s, const char *p, const char *o)
     }
     if (facts_transaction_commit(space->db) != 0) {
         facts_transaction_rollback(space->db);
-        return LINDA_ERROR;
+        goto error;
     }
     /* Duplicate out() changes multiplicity without changing physical visibility. */
     linda_signal_subject(space, s);
+    linda_operation_end(space);
     return LINDA_OK;
+
+error:
+    linda_operation_end(space);
+    return LINDA_ERROR;
 }
 
 static void copy_output(char *out, size_t max, const char *value)
@@ -503,29 +528,39 @@ static int linda_rd_wait(s_linda_space *space, const s_linda_pattern *pattern, c
 {
     if (!space || !pattern)
         return LINDA_ERROR;
+    int result = linda_operation_begin(space);
+    if (result != LINDA_OK)
+        return result;
     unsigned int idx = pattern->cond_index;
     pthread_mutex_lock(&space->locks[idx]);
     for (;;) {
+        if (linda_closed(space)) {
+            result = LINDA_CLOSED;
+            break;
+        }
         int found = match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, NULL, NULL, NULL);
         if (found < 0) {
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_ERROR;
+            result = LINDA_ERROR;
+            break;
         }
         if (found) {
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_OK;
+            result = LINDA_OK;
+            break;
         }
         int rc = deadline ? pthread_cond_timedwait(&space->conds[idx], &space->locks[idx], deadline)
                           : pthread_cond_wait(&space->conds[idx], &space->locks[idx]);
         if (rc == ETIMEDOUT) {
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_TIMEOUT;
+            result = LINDA_TIMEOUT;
+            break;
         }
         if (rc != 0) {
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_ERROR;
+            result = LINDA_ERROR;
+            break;
         }
     }
+    pthread_mutex_unlock(&space->locks[idx]);
+    linda_operation_end(space);
+    return result;
 }
 
 static int linda_in_wait(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
@@ -533,44 +568,57 @@ static int linda_in_wait(s_linda_space *space, const s_linda_pattern *pattern, c
 {
     if (!space || !pattern)
         return LINDA_ERROR;
+    int result = linda_operation_begin(space);
+    if (result != LINDA_OK)
+        return result;
     unsigned int idx = pattern->cond_index;
     pthread_mutex_lock(&space->locks[idx]);
     for (;;) {
+        if (linda_closed(space)) {
+            result = LINDA_CLOSED;
+            break;
+        }
         const char *match_s = NULL, *match_p = NULL, *match_o = NULL;
         if (facts_transaction_begin(space->db) != 0) {
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_ERROR;
+            result = LINDA_ERROR;
+            break;
         }
         int found = match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, &match_s, &match_p, &match_o);
         if (found < 0) {
             facts_transaction_rollback(space->db);
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_ERROR;
+            result = LINDA_ERROR;
+            break;
         }
         if (found) {
             int removed = linda_consume_one(space, match_s, match_p, match_o);
             pthread_mutex_unlock(&space->locks[idx]);
             if (!removed || facts_transaction_commit(space->db) != 0) {
                 facts_transaction_rollback(space->db);
-                return LINDA_ERROR;
+                result = LINDA_ERROR;
+            } else {
+                result = LINDA_OK;
             }
-            return LINDA_OK;
+            linda_operation_end(space);
+            return result;
         }
         if (facts_transaction_commit(space->db) != 0) {
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_ERROR;
+            result = LINDA_ERROR;
+            break;
         }
         int rc = deadline ? pthread_cond_timedwait(&space->conds[idx], &space->locks[idx], deadline)
                           : pthread_cond_wait(&space->conds[idx], &space->locks[idx]);
         if (rc == ETIMEDOUT) {
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_TIMEOUT;
+            result = LINDA_TIMEOUT;
+            break;
         }
         if (rc != 0) {
-            pthread_mutex_unlock(&space->locks[idx]);
-            return LINDA_ERROR;
+            result = LINDA_ERROR;
+            break;
         }
     }
+    pthread_mutex_unlock(&space->locks[idx]);
+    linda_operation_end(space);
+    return result;
 }
 
 int linda_rd_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
@@ -608,28 +656,44 @@ int linda_rdp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char
 {
     if (!space || !pattern)
         return LINDA_ERROR;
-    return match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, NULL, NULL, NULL);
+    int result = linda_operation_begin(space);
+    if (result != LINDA_OK)
+        return result;
+    result = match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, NULL, NULL, NULL);
+    linda_operation_end(space);
+    return result;
 }
 
 int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
                       char *out_o, size_t max_o)
 {
-    if (!space || !pattern || facts_transaction_begin(space->db) != 0)
+    if (!space || !pattern)
         return LINDA_ERROR;
+    int result = linda_operation_begin(space);
+    if (result != LINDA_OK)
+        return result;
+    if (facts_transaction_begin(space->db) != 0) {
+        linda_operation_end(space);
+        return LINDA_ERROR;
+    }
     const char *match_s = NULL, *match_p = NULL, *match_o = NULL;
     int found = match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, &match_s, &match_p, &match_o);
     if (found < 0) {
         facts_transaction_rollback(space->db);
+        linda_operation_end(space);
         return LINDA_ERROR;
     }
     if (found && linda_consume_one(space, match_s, match_p, match_o) <= 0) {
         facts_transaction_rollback(space->db);
+        linda_operation_end(space);
         return LINDA_ERROR;
     }
     if (facts_transaction_commit(space->db) != 0) {
         facts_transaction_rollback(space->db);
+        linda_operation_end(space);
         return LINDA_ERROR;
     }
+    linda_operation_end(space);
     return found;
 }
 
@@ -712,7 +776,7 @@ int linda_eval(s_linda_space *space, f_linda_worker func, void *arg)
     if (space->shutting_down) {
         pthread_mutex_unlock(&space->worker_lock);
         free(args);
-        return LINDA_ERROR;
+        return LINDA_CLOSED;
     }
     space->active_workers++;
     pthread_mutex_unlock(&space->worker_lock);

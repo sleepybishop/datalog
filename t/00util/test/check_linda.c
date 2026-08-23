@@ -182,6 +182,59 @@ START_TEST(test_linda_timed_operations)
 }
 END_TEST
 
+typedef struct {
+    s_linda_space *space;
+    int consume;
+    int result;
+} s_close_wait_args;
+
+static void *close_waiter(void *arg)
+{
+    s_close_wait_args *args = (s_close_wait_args *)arg;
+    if (args->consume)
+        args->result = linda_in(args->space, "never", "arrives", "?Value", NULL, 0, NULL, 0, NULL, 0);
+    else
+        args->result = linda_rd(args->space, "never", "arrives", "?Value", NULL, 0, NULL, 0, NULL, 0);
+    return NULL;
+}
+
+START_TEST(test_linda_close_cancels_blocked_operations)
+{
+    s_linda_space *space = new_linda_space(1000);
+    ck_assert(space != NULL);
+    s_close_wait_args rd_args = {.space = space, .consume = 0, .result = LINDA_ERROR};
+    s_close_wait_args in_args = {.space = space, .consume = 1, .result = LINDA_ERROR};
+    pthread_t rd_thread;
+    pthread_t in_thread;
+    ck_assert_int_eq(pthread_create(&rd_thread, NULL, close_waiter, &rd_args), 0);
+    ck_assert_int_eq(pthread_create(&in_thread, NULL, close_waiter, &in_args), 0);
+    usleep(50000);
+
+    ck_assert_int_eq(linda_space_close(space), LINDA_OK);
+    ck_assert_int_eq(linda_space_close(space), LINDA_OK);
+    pthread_join(rd_thread, NULL);
+    pthread_join(in_thread, NULL);
+    ck_assert_int_eq(rd_args.result, LINDA_CLOSED);
+    ck_assert_int_eq(in_args.result, LINDA_CLOSED);
+    ck_assert_int_eq(linda_space_is_closed(space), 1);
+    delete_linda_space(space);
+}
+END_TEST
+
+START_TEST(test_linda_close_rejects_new_work)
+{
+    s_linda_space *space = new_linda_space(1000);
+    ck_assert(space != NULL);
+    ck_assert_int_eq(linda_space_is_closed(space), 0);
+    ck_assert_int_eq(linda_space_close(space), LINDA_OK);
+    ck_assert_int_eq(linda_out(space, "closed", "space", "tuple"), LINDA_CLOSED);
+    ck_assert_int_eq(linda_rdp(space, "?S", "?P", "?O", NULL, 0, NULL, 0, NULL, 0), LINDA_CLOSED);
+    ck_assert_int_eq(linda_inp(space, "?S", "?P", "?O", NULL, 0, NULL, 0, NULL, 0), LINDA_CLOSED);
+    ck_assert_int_eq(linda_eval(space, eval_worker, space), LINDA_CLOSED);
+    delete_linda_space(space);
+}
+END_TEST
+
 START_TEST(test_linda_reusable_pattern)
 {
     s_linda_space *space = new_linda_space(1000);
@@ -403,6 +456,8 @@ Suite *linda_suite(void)
     tcase_add_test(tc_core, test_linda_blocking_in);
     tcase_add_test(tc_core, test_linda_eval);
     tcase_add_test(tc_core, test_linda_timed_operations);
+    tcase_add_test(tc_core, test_linda_close_cancels_blocked_operations);
+    tcase_add_test(tc_core, test_linda_close_rejects_new_work);
     tcase_add_test(tc_core, test_linda_reusable_pattern);
     tcase_add_test(tc_core, test_linda_wakes_after_direct_database_commit);
     tcase_add_test(tc_core, test_linda_notification_survives_public_observer_registration);
