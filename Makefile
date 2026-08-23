@@ -48,7 +48,12 @@ t/00util/bench/benchmark_set_remove
 
 CPPFLAGS = -Iinclude -Ideps/rax -D_DEFAULT_SOURCE
 CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC
+CPPFLAGS += -MMD -MP
 LDLIBS = -lm
+
+DEPS=$(OBJ:.o=.d) $(TEST_UTILS:=.d) $(BENCH_UTILS:=.d) sparql_repl.d deps/linenoise/linenoise.d
+
+-include $(DEPS)
 
 all: libdatalog.a sparql_repl
 
@@ -89,7 +94,7 @@ t/00util/test/check_magic: t/00util/test/check_magic.o $(OBJ)
 t/00util/test/check_linda: t/00util/test/check_linda.o $(OBJ)
 
 
-check: CFLAGS=-O0 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused
+check: CFLAGS=-O2 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused
 check: $(TEST_UTILS) $(BENCH_UTILS);
 	prove -I. -v t/*.t
 
@@ -101,7 +106,7 @@ sparql_repl: sparql_repl.o deps/linenoise/linenoise.o $(OBJ)
 
 
 clean:
-	$(RM) *.o *.a *.gperf *.prof t/00util/bench/*.o t/00util/test/*.o deps/linenoise/*.o sparql_repl $(TEST_UTILS) $(BENCH_UTILS) $(OBJ)
+	$(RM) *.o *.a *.gperf *.prof t/00util/bench/*.o t/00util/test/*.o deps/linenoise/*.o sparql_repl $(TEST_UTILS) $(BENCH_UTILS) $(OBJ) $(DEPS)
 
 
 indent:
@@ -110,3 +115,4 @@ indent:
 scan:
 	scan-build $(MAKE) clean all
 
+.PHONY: all check clean indent scan

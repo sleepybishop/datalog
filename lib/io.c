@@ -8,9 +8,10 @@
 int write_string_quoted(const char *string, FILE *fp)
 {
     size_t i;
+    size_t string_len = strlen(string);
     if (fwrite("\"", 1, 1, fp) != 1)
         return -1;
-    for (i = 0; i < strlen(string); i++) {
+    for (i = 0; i < string_len; i++) {
         switch (string[i]) {
         case '"':
         case '\\':
@@ -189,7 +190,7 @@ int read_facts(s_facts *facts, FILE *fp)
     return 0;
 }
 
-int write_fact_log(const char *operation, s_fact *f, FILE *fp)
+int write_fact_log(const char *operation, const s_fact *f, FILE *fp)
 {
     if (fwrite(operation, strlen(operation), 1, fp) != 1)
         return -1;

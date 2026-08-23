@@ -24,7 +24,7 @@ int write_facts(s_facts *facts, FILE *fp);
 
 int read_facts_log(s_facts *facts, FILE *fp);
 
-int write_fact_log(const char *operation, s_fact *f, FILE *fp);
+int write_fact_log(const char *operation, const s_fact *f, FILE *fp);
 
 int write_spec(p_spec spec, FILE *fp);
 

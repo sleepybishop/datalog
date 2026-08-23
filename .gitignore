@@ -1,6 +1,7 @@
 rst
 bench
 *.o
+*.d
 *.a
 t/00util/bench/benchmark_set
 t/00util/bench/benchmark_facts_add
