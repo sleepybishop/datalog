@@ -204,9 +204,7 @@ START_TEST(test_eval_preserves_independent_asserted_and_derived_support)
     s_intern *sym = new_intern(1000);
     s_facts *db = new_facts(sym, 1000);
     s_datalog_program *prog = new_datalog_program();
-    ck_assert_int_eq(datalog_program_parse_rules(
-                         prog, "?X <grandparent> ?Z :- ?X <parent> ?Y, ?Y <parent> ?Z .\n"),
-                     0);
+    ck_assert_int_eq(datalog_program_parse_rules(prog, "?X <grandparent> ?Z :- ?X <parent> ?Y, ?Y <parent> ?Z .\n"), 0);
     ck_assert_int_eq(facts_attach_program(db, prog), 0);
     delete_datalog_program(prog);
 
@@ -359,8 +357,7 @@ START_TEST(test_program_attachment_owns_copy_and_recomputes)
 }
 END_TEST
 
-static int fail_after_reactive_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count,
-                                        void *user_data)
+static int fail_after_reactive_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
 {
     (void)facts;
     (void)entries;

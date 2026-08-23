@@ -401,7 +401,7 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
     const char **vars = calloc(subgoal_count_sz * 3, sizeof(*vars));
     s_lftj_iterator *iterators_storage = calloc(subgoal_count_sz, sizeof(*iterators_storage));
     s_lftj_iterator **iterators = calloc(subgoal_count_sz, sizeof(*iterators));
-    int(*iterator_cols)[3] = calloc(subgoal_count_sz, sizeof(*iterator_cols));
+    int (*iterator_cols)[3] = calloc(subgoal_count_sz, sizeof(*iterator_cols));
     if (!subgoals || !vars || !iterators_storage || !iterators || !iterator_cols)
         goto cleanup;
 

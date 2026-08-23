@@ -171,8 +171,7 @@ void facts_reset(s_facts *facts)
     facts_register_internal_tx_listener(facts, internal_listener, internal_listener_data);
     facts_register_commit_observer(facts, commit_observer, commit_observer_data);
     facts_register_commit_summary_observer(facts, commit_summary_observer, commit_summary_observer_data);
-    facts_register_internal_commit_summary_observer(facts, internal_commit_summary_observer,
-                                                    internal_commit_summary_observer_data);
+    facts_register_internal_commit_summary_observer(facts, internal_commit_summary_observer, internal_commit_summary_observer_data);
 }
 
 s_facts *new_facts(s_intern *symbols, unsigned long max)
@@ -1389,8 +1388,7 @@ void facts_register_commit_summary_observer(s_facts *facts, f_facts_commit_summa
     pthread_mutex_unlock(&facts->tx.state_mutex);
 }
 
-void facts_register_internal_commit_summary_observer(s_facts *facts, f_facts_commit_summary_observer observer,
-                                                     void *user_data)
+void facts_register_internal_commit_summary_observer(s_facts *facts, f_facts_commit_summary_observer observer, void *user_data)
 {
     assert(facts);
     pthread_mutex_lock(&facts->tx.state_mutex);
@@ -1403,8 +1401,8 @@ int facts_justifications_stage(s_facts *facts, int preserve_existing)
 {
     if (!facts || facts->justifications_staging)
         return -1;
-    facts->justifications_staging = preserve_existing ? justification_graph_clone(facts->justifications)
-                                                      : new_justification_graph();
+    facts->justifications_staging =
+        preserve_existing ? justification_graph_clone(facts->justifications) : new_justification_graph();
     return facts->justifications_staging ? 0 : -1;
 }
 

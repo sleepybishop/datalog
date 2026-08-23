@@ -180,7 +180,7 @@ s_datalog_program *datalog_program_magic_transform(const s_datalog_program *prog
                 add_var_to_bound(&bound_vars, &bound_count, orig_rule->head.o);
             }
 
-            char(*sub_adornments)[3] = calloc(orig_rule->body_count ? orig_rule->body_count : 1, sizeof(*sub_adornments));
+            char (*sub_adornments)[3] = calloc(orig_rule->body_count ? orig_rule->body_count : 1, sizeof(*sub_adornments));
             int *is_sub_idb = calloc(orig_rule->body_count ? orig_rule->body_count : 1, sizeof(*is_sub_idb));
             assert(sub_adornments);
             assert(is_sub_idb);

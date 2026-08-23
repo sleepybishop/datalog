@@ -36,12 +36,11 @@ void delete_justification_graph(s_justification_graph *graph)
 
 static int support_equal(const s_justification_support *a, const s_justification_support *b)
 {
-    return a->negated == b->negated && strcmp(a->s, b->s) == 0 && strcmp(a->p, b->p) == 0 &&
-           strcmp(a->o, b->o) == 0;
+    return a->negated == b->negated && strcmp(a->s, b->s) == 0 && strcmp(a->p, b->p) == 0 && strcmp(a->o, b->o) == 0;
 }
 
-static int justification_equal(const s_justification *item, const char *s, const char *p, const char *o,
-                               size_t rule_index, const s_justification_support *supports, size_t support_count)
+static int justification_equal(const s_justification *item, const char *s, const char *p, const char *o, size_t rule_index,
+                               const s_justification_support *supports, size_t support_count)
 {
     if (item->rule_index != rule_index || item->support_count != support_count || strcmp(item->s, s) != 0 ||
         strcmp(item->p, p) != 0 || strcmp(item->o, o) != 0)
@@ -69,8 +68,8 @@ static int support_copy(s_justification_support *dest, const s_justification_sup
     return 0;
 }
 
-int justification_graph_add(s_justification_graph *graph, const char *s, const char *p, const char *o,
-                            size_t rule_index, const s_justification_support *supports, size_t support_count)
+int justification_graph_add(s_justification_graph *graph, const char *s, const char *p, const char *o, size_t rule_index,
+                            const s_justification_support *supports, size_t support_count)
 {
     if (!graph || !s || !p || !o || (support_count && !supports))
         return -1;
@@ -118,8 +117,7 @@ s_justification_graph *justification_graph_clone(const s_justification_graph *gr
         return copy;
     for (size_t i = 0; i < graph->count; i++) {
         const s_justification *item = &graph->items[i];
-        if (justification_graph_add(copy, item->s, item->p, item->o, item->rule_index, item->supports,
-                                    item->support_count) < 0) {
+        if (justification_graph_add(copy, item->s, item->p, item->o, item->rule_index, item->supports, item->support_count) < 0) {
             delete_justification_graph(copy);
             return NULL;
         }

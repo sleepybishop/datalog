@@ -60,10 +60,10 @@ int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, 
              size_t max_p, char *out_o, size_t max_o);
 
 /* Timed blocking operations. Return LINDA_TIMEOUT when timeout_ms elapses. */
-int linda_rd_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s,
-                   char *out_p, size_t max_p, char *out_o, size_t max_o, long timeout_ms);
-int linda_in_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s,
-                   char *out_p, size_t max_p, char *out_o, size_t max_o, long timeout_ms);
+int linda_rd_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+                   size_t max_p, char *out_o, size_t max_o, long timeout_ms);
+int linda_in_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+                   size_t max_p, char *out_o, size_t max_o, long timeout_ms);
 
 /* Linda rdp(S, P, O, out_s, out_p, out_o) - Non-blocking read (returns 1 if found, 0 if not) */
 int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
@@ -73,14 +73,14 @@ int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o,
 int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
               size_t max_p, char *out_o, size_t max_o);
 
-int linda_rd_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                     size_t max_p, char *out_o, size_t max_o);
-int linda_in_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                     size_t max_p, char *out_o, size_t max_o);
-int linda_rdp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                      size_t max_p, char *out_o, size_t max_o);
-int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                      size_t max_p, char *out_o, size_t max_o);
+int linda_rd_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                     char *out_o, size_t max_o);
+int linda_in_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                     char *out_o, size_t max_o);
+int linda_rdp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                      char *out_o, size_t max_o);
+int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                      char *out_o, size_t max_o);
 int linda_rd_pattern_timed(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
                            size_t max_p, char *out_o, size_t max_o, long timeout_ms);
 int linda_in_pattern_timed(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,

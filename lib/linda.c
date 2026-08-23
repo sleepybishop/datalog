@@ -33,12 +33,45 @@ struct linda_space {
     pthread_mutex_t worker_lock;
     pthread_cond_t worker_cond;
     size_t active_workers;
+    size_t active_operations;
     int shutting_down;
 };
 
 #define LINDA_ENTRY_KEY_SIZE (sizeof(Symbol) * 3)
 
 _Static_assert(LINDA_COND_PARTITIONS == FACTS_COMMIT_PARTITIONS, "Linda and commit partitions must match");
+
+static int linda_operation_begin(s_linda_space *space)
+{
+    if (!space)
+        return LINDA_ERROR;
+    pthread_mutex_lock(&space->worker_lock);
+    if (space->shutting_down) {
+        pthread_mutex_unlock(&space->worker_lock);
+        return LINDA_CLOSED;
+    }
+    space->active_operations++;
+    pthread_mutex_unlock(&space->worker_lock);
+    return LINDA_OK;
+}
+
+static void linda_operation_end(s_linda_space *space)
+{
+    pthread_mutex_lock(&space->worker_lock);
+    if (space->active_operations > 0)
+        space->active_operations--;
+    if (space->active_operations == 0)
+        pthread_cond_broadcast(&space->worker_cond);
+    pthread_mutex_unlock(&space->worker_lock);
+}
+
+static int linda_closed(s_linda_space *space)
+{
+    pthread_mutex_lock(&space->worker_lock);
+    int closed = space->shutting_down;
+    pthread_mutex_unlock(&space->worker_lock);
+    return closed;
+}
 
 static unsigned int get_linda_cond_idx(const char *s)
 {
@@ -207,6 +240,7 @@ s_linda_space *new_linda_space(unsigned long max_symbols)
         return NULL;
     }
     space->active_workers = 0;
+    space->active_operations = 0;
     space->shutting_down = 0;
     for (size_t i = 0; i < LINDA_COND_PARTITIONS; i++) {
         if (pthread_mutex_init(&space->locks[i], NULL) != 0) {
@@ -250,21 +284,61 @@ s_facts *linda_space_facts(s_linda_space *space)
 
 int linda_space_attach_program(s_linda_space *space, const s_datalog_program *program)
 {
-    return space ? facts_attach_program(space->db, program) : -1;
+    if (!space || !program)
+        return LINDA_ERROR;
+    int result = linda_operation_begin(space);
+    if (result != LINDA_OK)
+        return result;
+    result = facts_attach_program(space->db, program) == 0 ? LINDA_OK : LINDA_ERROR;
+    linda_operation_end(space);
+    return result;
 }
 
 int linda_space_detach_program(s_linda_space *space)
 {
-    return space ? facts_detach_program(space->db) : -1;
+    if (!space)
+        return LINDA_ERROR;
+    int result = linda_operation_begin(space);
+    if (result != LINDA_OK)
+        return result;
+    result = facts_detach_program(space->db) == 0 ? LINDA_OK : LINDA_ERROR;
+    linda_operation_end(space);
+    return result;
+}
+
+int linda_space_close(s_linda_space *space)
+{
+    if (!space)
+        return LINDA_ERROR;
+    pthread_mutex_lock(&space->worker_lock);
+    int already_closed = space->shutting_down;
+    space->shutting_down = 1;
+    pthread_mutex_unlock(&space->worker_lock);
+
+    if (!already_closed) {
+        for (size_t i = 0; i < LINDA_COND_PARTITIONS; i++) {
+            pthread_mutex_lock(&space->locks[i]);
+            pthread_cond_broadcast(&space->conds[i]);
+            pthread_mutex_unlock(&space->locks[i]);
+        }
+    }
+    return LINDA_OK;
+}
+
+int linda_space_is_closed(s_linda_space *space)
+{
+    if (!space)
+        return LINDA_ERROR;
+    return linda_closed(space);
 }
 
 void delete_linda_space(s_linda_space *space)
 {
     if (!space)
         return;
+    linda_space_close(space);
     pthread_mutex_lock(&space->worker_lock);
-    space->shutting_down = 1;
-    while (space->active_workers > 0)
+    while (space->active_workers > 0 || space->active_operations > 0)
         pthread_cond_wait(&space->worker_cond, &space->worker_lock);
     pthread_mutex_unlock(&space->worker_lock);
     facts_register_internal_commit_summary_observer(space->db, NULL, NULL);
@@ -336,9 +410,9 @@ static void copy_output(char *out, size_t max, const char *value)
     }
 }
 
-static int match_and_extract(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s,
-                             char *out_p, size_t max_p, char *out_o, size_t max_o, const char **match_s,
-                             const char **match_p, const char **match_o)
+static int match_and_extract(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
+                             size_t max_p, char *out_o, size_t max_o, const char **match_s, const char **match_p,
+                             const char **match_o)
 {
     const char *values[3] = {NULL, NULL, NULL};
     s_binding bindings[4];
@@ -366,8 +440,8 @@ static int match_and_extract(s_linda_space *space, const s_linda_pattern *patter
         int valid = 1;
         for (size_t i = 0; i < 3 && valid; i++) {
             for (size_t j = i + 1; j < 3; j++) {
-                if (pattern->variable_index[i] >= 0 &&
-                    pattern->variable_index[i] == pattern->variable_index[j] && strcmp(matched[i], matched[j]) != 0) {
+                if (pattern->variable_index[i] >= 0 && pattern->variable_index[i] == pattern->variable_index[j] &&
+                    strcmp(matched[i], matched[j]) != 0) {
                     valid = 0;
                     break;
                 }
@@ -424,8 +498,8 @@ static int make_deadline(long timeout_ms, struct timespec *deadline)
     return 0;
 }
 
-static int linda_rd_wait(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                         size_t max_p, char *out_o, size_t max_o, const struct timespec *deadline)
+static int linda_rd_wait(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                         char *out_o, size_t max_o, const struct timespec *deadline)
 {
     if (!space || !pattern)
         return LINDA_ERROR;
@@ -454,8 +528,8 @@ static int linda_rd_wait(s_linda_space *space, const s_linda_pattern *pattern, c
     }
 }
 
-static int linda_in_wait(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                         size_t max_p, char *out_o, size_t max_o, const struct timespec *deadline)
+static int linda_in_wait(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                         char *out_o, size_t max_o, const struct timespec *deadline)
 {
     if (!space || !pattern)
         return LINDA_ERROR;
@@ -467,8 +541,7 @@ static int linda_in_wait(s_linda_space *space, const s_linda_pattern *pattern, c
             pthread_mutex_unlock(&space->locks[idx]);
             return LINDA_ERROR;
         }
-        int found = match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, &match_s, &match_p,
-                                      &match_o);
+        int found = match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, &match_s, &match_p, &match_o);
         if (found < 0) {
             facts_transaction_rollback(space->db);
             pthread_mutex_unlock(&space->locks[idx]);
@@ -500,14 +573,14 @@ static int linda_in_wait(s_linda_space *space, const s_linda_pattern *pattern, c
     }
 }
 
-int linda_rd_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                     size_t max_p, char *out_o, size_t max_o)
+int linda_rd_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                     char *out_o, size_t max_o)
 {
     return linda_rd_wait(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, NULL);
 }
 
-int linda_in_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                     size_t max_p, char *out_o, size_t max_o)
+int linda_in_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                     char *out_o, size_t max_o)
 {
     return linda_in_wait(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, NULL);
 }
@@ -530,22 +603,21 @@ int linda_in_pattern_timed(s_linda_space *space, const s_linda_pattern *pattern,
     return linda_in_wait(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, &deadline);
 }
 
-int linda_rdp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                      size_t max_p, char *out_o, size_t max_o)
+int linda_rdp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                      char *out_o, size_t max_o)
 {
     if (!space || !pattern)
         return LINDA_ERROR;
     return match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, NULL, NULL, NULL);
 }
 
-int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
-                      size_t max_p, char *out_o, size_t max_o)
+int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p, size_t max_p,
+                      char *out_o, size_t max_o)
 {
     if (!space || !pattern || facts_transaction_begin(space->db) != 0)
         return LINDA_ERROR;
     const char *match_s = NULL, *match_p = NULL, *match_o = NULL;
-    int found = match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, &match_s, &match_p,
-                                  &match_o);
+    int found = match_and_extract(space, pattern, out_s, max_s, out_p, max_p, out_o, max_o, &match_s, &match_p, &match_o);
     if (found < 0) {
         facts_transaction_rollback(space->db);
         return LINDA_ERROR;
@@ -561,10 +633,10 @@ int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char
     return found;
 }
 
-#define WITH_PATTERN(call)                                                                                             \
-    s_linda_pattern pattern;                                                                                          \
-    if (linda_pattern_init(&pattern, s, p, o, 0) != 0)                                                               \
-        return LINDA_ERROR;                                                                                           \
+#define WITH_PATTERN(call)                                                                                                         \
+    s_linda_pattern pattern;                                                                                                       \
+    if (linda_pattern_init(&pattern, s, p, o, 0) != 0)                                                                             \
+        return LINDA_ERROR;                                                                                                        \
     return call
 
 int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
@@ -579,14 +651,14 @@ int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, 
     WITH_PATTERN(linda_in_pattern(space, &pattern, out_s, max_s, out_p, max_p, out_o, max_o));
 }
 
-int linda_rd_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s,
-                   char *out_p, size_t max_p, char *out_o, size_t max_o, long timeout_ms)
+int linda_rd_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+                   size_t max_p, char *out_o, size_t max_o, long timeout_ms)
 {
     WITH_PATTERN(linda_rd_pattern_timed(space, &pattern, out_s, max_s, out_p, max_p, out_o, max_o, timeout_ms));
 }
 
-int linda_in_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s,
-                   char *out_p, size_t max_p, char *out_o, size_t max_o, long timeout_ms)
+int linda_in_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
+                   size_t max_p, char *out_o, size_t max_o, long timeout_ms)
 {
     WITH_PATTERN(linda_in_pattern_timed(space, &pattern, out_s, max_s, out_p, max_p, out_o, max_o, timeout_ms));
 }

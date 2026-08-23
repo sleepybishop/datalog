@@ -175,12 +175,9 @@ START_TEST(test_linda_timed_operations)
 {
     s_linda_space *space = new_linda_space(1000);
     ck_assert(space != NULL);
-    ck_assert_int_eq(linda_rd_timed(space, "missing", "tuple", "?Value", NULL, 0, NULL, 0, NULL, 0, 20),
-                     LINDA_TIMEOUT);
-    ck_assert_int_eq(linda_in_timed(space, "missing", "tuple", "?Value", NULL, 0, NULL, 0, NULL, 0, 20),
-                     LINDA_TIMEOUT);
-    ck_assert_int_eq(linda_rd_timed(space, "missing", "tuple", "?Value", NULL, 0, NULL, 0, NULL, 0, -1),
-                     LINDA_ERROR);
+    ck_assert_int_eq(linda_rd_timed(space, "missing", "tuple", "?Value", NULL, 0, NULL, 0, NULL, 0, 20), LINDA_TIMEOUT);
+    ck_assert_int_eq(linda_in_timed(space, "missing", "tuple", "?Value", NULL, 0, NULL, 0, NULL, 0, 20), LINDA_TIMEOUT);
+    ck_assert_int_eq(linda_rd_timed(space, "missing", "tuple", "?Value", NULL, 0, NULL, 0, NULL, 0, -1), LINDA_ERROR);
     delete_linda_space(space);
 }
 END_TEST
@@ -230,8 +227,7 @@ START_TEST(test_linda_wakes_after_direct_database_commit)
     pthread_t thread;
     ck_assert_int_eq(pthread_create(&thread, NULL, direct_transaction_producer, space), 0);
     char value[32] = {0};
-    ck_assert_int_eq(linda_rd_timed(space, "direct", "commit", "?Value", NULL, 0, NULL, 0, value, sizeof(value), 500),
-                     LINDA_OK);
+    ck_assert_int_eq(linda_rd_timed(space, "direct", "commit", "?Value", NULL, 0, NULL, 0, value, sizeof(value), 500), LINDA_OK);
     ck_assert_str_eq(value, "visible");
     pthread_join(thread, NULL);
     delete_linda_space(space);
@@ -248,8 +244,7 @@ START_TEST(test_linda_notification_survives_public_observer_registration)
 
     pthread_t thread;
     ck_assert_int_eq(pthread_create(&thread, NULL, direct_transaction_producer, space), 0);
-    ck_assert_int_eq(linda_rd_timed(space, "direct", "commit", "visible", NULL, 0, NULL, 0, NULL, 0, 500),
-                     LINDA_OK);
+    ck_assert_int_eq(linda_rd_timed(space, "direct", "commit", "visible", NULL, 0, NULL, 0, NULL, 0, 500), LINDA_OK);
     pthread_join(thread, NULL);
     ck_assert_int_eq(public_summary_observer_calls, 1);
 
