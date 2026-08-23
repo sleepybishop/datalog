@@ -185,6 +185,8 @@ static int add_pred_to_list_eval(const char ***list, size_t *count, const char *
             return 0;
         }
     }
+    if (*count == SIZE_MAX / sizeof(char *))
+        return -1;
     const char **new_list = realloc(*list, (*count + 1) * sizeof(char *));
     if (!new_list)
         return -1;
@@ -353,6 +355,15 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
             free(bindings);
         }
 
+        if (evaluation_error) {
+            delete_facts(old_db);
+            delete_facts(delta_db);
+            delete_facts(new_db);
+            delete_facts(old_plus_delta_db);
+            free(idb_preds);
+            break;
+        }
+
         size_t delta_size = facts_count(delta_db);
         if (delta_size == 0) {
             delete_facts(old_db);
@@ -496,6 +507,8 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
         delete_facts(new_db);
         delete_facts(old_plus_delta_db);
         free(idb_preds);
+        if (evaluation_error)
+            break;
     }
 
     free(rule_strata);
@@ -533,6 +546,8 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 {
     if (!facts || !prog || !delta || delta_count == 0)
         return 0;
+    if (prog->rule_count == 0)
+        return 0;
 
     int num_strata = 0;
     int *rule_strata = datalog_program_stratify(prog, &num_strata);
@@ -552,16 +567,22 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 
     for (size_t i = 0; i < delta_count; i++) {
         if (delta[i].action == ROLLBACK_REMOVE) {
-            facts_add_spo(cumulative_delta_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
-                          symbol_to_str(delta[i].fact.o));
+            if (!facts_add_spo(cumulative_delta_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
+                               symbol_to_str(delta[i].fact.o))) {
+                evaluation_error = 1;
+                break;
+            }
         } else if (delta[i].action == ROLLBACK_ADD) {
-            facts_add_spo(cumulative_minus_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
-                          symbol_to_str(delta[i].fact.o));
+            if (!facts_add_spo(cumulative_minus_db, symbol_to_str(delta[i].fact.s), symbol_to_str(delta[i].fact.p),
+                               symbol_to_str(delta[i].fact.o))) {
+                evaluation_error = 1;
+                break;
+            }
         }
     }
 
     /* Phase 1: Deletions */
-    for (int s = 0; s < num_strata; s++) {
+    for (int s = 0; !evaluation_error && s < num_strata; s++) {
         s_facts *delta_db = new_facts(facts->symbols, 256);
         s_facts *new_db = new_facts(facts->symbols, 256);
         if (!delta_db || !new_db) {
@@ -818,7 +839,11 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
             facts_cursor_init(new_db, &fc, new_db->index_spo, NULL, NULL);
             s_fact *f;
             while ((f = facts_cursor_next(&fc))) {
-                facts_add_spo_origin(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o), FACT_ORIGIN_DERIVED);
+                if (!facts_add_spo_origin(facts, symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o),
+                                          FACT_ORIGIN_DERIVED)) {
+                    evaluation_error = 1;
+                    break;
+                }
             }
             facts_cursor_stop(&fc);
 

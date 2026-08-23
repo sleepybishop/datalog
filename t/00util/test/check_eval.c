@@ -373,6 +373,12 @@ START_TEST(test_listener_failure_rolls_back_reactive_closure)
     ck_assert_int_eq(datalog_program_parse_rules(prog, "?X <result> yes :- ?X <source> yes .\n"), 0);
     ck_assert_int_eq(facts_attach_program(db, prog), 0);
     delete_datalog_program(prog);
+
+    ck_assert_int_eq(facts_transaction_begin(db), 0);
+    ck_assert(facts_add_spo(db, "kept", "source", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(db), 0);
+    ck_assert_int_eq(facts_justification_count(db, "kept", "result", "yes"), 1);
+
     facts_register_tx_listener(db, fail_after_reactive_listener, NULL);
 
     ck_assert_int_eq(facts_transaction_begin(db), 0);
@@ -380,6 +386,8 @@ START_TEST(test_listener_failure_rolls_back_reactive_closure)
     ck_assert_int_eq(facts_transaction_commit(db), -1);
     ck_assert_int_eq(facts_contains_spo(db, "item", "source", "yes"), 0);
     ck_assert_int_eq(facts_contains_spo(db, "item", "result", "yes"), 0);
+    ck_assert_int_eq(facts_justification_count(db, "item", "result", "yes"), 0);
+    ck_assert_int_eq(facts_justification_count(db, "kept", "result", "yes"), 1);
 
     delete_facts(db);
 }
