@@ -22,6 +22,17 @@ static void free_spec_fact_fields(s_spec_fact *f)
         free((char *)f->negated);
 }
 
+static void datalog_program_truncate(s_datalog_program *prog, size_t rule_count)
+{
+    while (prog->rule_count > rule_count) {
+        s_datalog_rule *rule = &prog->rules[--prog->rule_count];
+        free_spec_fact_fields(&rule->head);
+        for (size_t j = 0; j < rule->body_count; j++)
+            free_spec_fact_fields(&rule->body[j]);
+        free(rule->body);
+    }
+}
+
 void delete_datalog_program(s_datalog_program *prog)
 {
     if (!prog)
@@ -38,12 +49,26 @@ void delete_datalog_program(s_datalog_program *prog)
     free(prog);
 }
 
-static void clone_spec_fact_fields(s_spec_fact *dest, const s_spec_fact *src)
+static int clone_spec_fact_fields(s_spec_fact *dest, const s_spec_fact *src)
 {
     dest->s = src->s ? strdup(src->s) : NULL;
+    if (src->s && !dest->s)
+        return 0;
     dest->p = src->p ? strdup(src->p) : NULL;
+    if (src->p && !dest->p)
+        goto error;
     dest->o = src->o ? strdup(src->o) : NULL;
+    if (src->o && !dest->o)
+        goto error;
     dest->negated = src->negated ? strdup(src->negated) : NULL;
+    if (src->negated && !dest->negated)
+        goto error;
+    return 1;
+
+error:
+    free_spec_fact_fields(dest);
+    memset(dest, 0, sizeof(*dest));
+    return 0;
 }
 
 s_datalog_rule *datalog_program_add_rule(s_datalog_program *prog, const s_spec_fact *head, const s_spec_fact *body,
@@ -54,19 +79,32 @@ s_datalog_rule *datalog_program_add_rule(s_datalog_program *prog, const s_spec_f
     assert(body || body_count == 0);
 
     s_datalog_rule *new_rules = realloc(prog->rules, (prog->rule_count + 1) * sizeof(s_datalog_rule));
-    assert(new_rules);
+    if (!new_rules)
+        return NULL;
     prog->rules = new_rules;
 
     s_datalog_rule *rule = &prog->rules[prog->rule_count];
     memset(rule, 0, sizeof(s_datalog_rule));
-    clone_spec_fact_fields(&rule->head, head);
+    if (!clone_spec_fact_fields(&rule->head, head))
+        return NULL;
 
     if (body_count > 0) {
         rule->body = calloc(body_count, sizeof(s_spec_fact));
-        assert(rule->body);
+        if (!rule->body) {
+            free_spec_fact_fields(&rule->head);
+            memset(rule, 0, sizeof(*rule));
+            return NULL;
+        }
         rule->body_count = body_count;
         for (size_t i = 0; i < body_count; i++) {
-            clone_spec_fact_fields(&rule->body[i], &body[i]);
+            if (!clone_spec_fact_fields(&rule->body[i], &body[i])) {
+                for (size_t j = 0; j < i; j++)
+                    free_spec_fact_fields(&rule->body[j]);
+                free(rule->body);
+                free_spec_fact_fields(&rule->head);
+                memset(rule, 0, sizeof(*rule));
+                return NULL;
+            }
         }
     }
 
@@ -222,6 +260,8 @@ static s_rule_token next_rule_token(const char **p)
     if (strncmp(*p, ":-", 2) == 0) {
         t.type = RULE_TOK_TURNSTILE;
         t.value = strdup(":-");
+        if (!t.value)
+            t.type = RULE_TOK_ERROR;
         (*p) += 2;
         return t;
     }
@@ -229,6 +269,8 @@ static s_rule_token next_rule_token(const char **p)
     if (**p == ',') {
         t.type = RULE_TOK_COMMA;
         t.value = strdup(",");
+        if (!t.value)
+            t.type = RULE_TOK_ERROR;
         (*p)++;
         return t;
     }
@@ -236,6 +278,8 @@ static s_rule_token next_rule_token(const char **p)
     if (**p == '.') {
         t.type = RULE_TOK_DOT;
         t.value = strdup(".");
+        if (!t.value)
+            t.type = RULE_TOK_ERROR;
         (*p)++;
         return t;
     }
@@ -243,6 +287,8 @@ static s_rule_token next_rule_token(const char **p)
     if (**p == '(') {
         t.type = RULE_TOK_LPAREN;
         t.value = strdup("(");
+        if (!t.value)
+            t.type = RULE_TOK_ERROR;
         (*p)++;
         return t;
     }
@@ -250,6 +296,8 @@ static s_rule_token next_rule_token(const char **p)
     if (**p == ')') {
         t.type = RULE_TOK_RPAREN;
         t.value = strdup(")");
+        if (!t.value)
+            t.type = RULE_TOK_ERROR;
         (*p)++;
         return t;
     }
@@ -263,7 +311,10 @@ static s_rule_token next_rule_token(const char **p)
         size_t len = *p - start;
         t.type = RULE_TOK_VAR;
         t.value = malloc(len + 1);
-        assert(t.value);
+        if (!t.value) {
+            t.type = RULE_TOK_ERROR;
+            return t;
+        }
         memcpy(t.value, start, len);
         t.value[len] = '\0';
         return t;
@@ -279,7 +330,10 @@ static s_rule_token next_rule_token(const char **p)
             size_t len = *p - start;
             t.type = RULE_TOK_CONST;
             t.value = malloc(len + 1);
-            assert(t.value);
+            if (!t.value) {
+                t.type = RULE_TOK_ERROR;
+                return t;
+            }
             memcpy(t.value, start, len);
             t.value[len] = '\0';
             (*p)++;
@@ -300,7 +354,10 @@ static s_rule_token next_rule_token(const char **p)
             size_t len = *p - start;
             t.type = RULE_TOK_CONST;
             t.value = malloc(len + 1);
-            assert(t.value);
+            if (!t.value) {
+                t.type = RULE_TOK_ERROR;
+                return t;
+            }
             memcpy(t.value, start, len);
             t.value[len] = '\0';
             (*p)++;
@@ -320,7 +377,10 @@ static s_rule_token next_rule_token(const char **p)
     size_t len = *p - start;
     if (len > 0) {
         char *word = malloc(len + 1);
-        assert(word);
+        if (!word) {
+            t.type = RULE_TOK_ERROR;
+            return t;
+        }
         memcpy(word, start, len);
         word[len] = '\0';
 
@@ -340,20 +400,31 @@ static s_rule_token next_rule_token(const char **p)
 
 int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
 {
+    if (!prog || !rules_str)
+        return -1;
+
+    size_t original_rule_count = prog->rule_count;
     const char *p = rules_str;
     s_rule_token tok;
 
     size_t count = 0;
     size_t capacity = 16;
     s_rule_token *tokens = malloc(capacity * sizeof(s_rule_token));
-    assert(tokens);
+    if (!tokens)
+        return -1;
 
     while (1) {
         tok = next_rule_token(&p);
         if (count >= capacity) {
             capacity *= 2;
             s_rule_token *new_tokens = realloc(tokens, capacity * sizeof(s_rule_token));
-            assert(new_tokens);
+            if (!new_tokens) {
+                free(tok.value);
+                for (size_t i = 0; i < count; i++)
+                    free(tokens[i].value);
+                free(tokens);
+                return -1;
+            }
             tokens = new_tokens;
         }
         tokens[count++] = tok;
@@ -398,7 +469,8 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
         size_t body_capacity = 4;
         size_t body_count = 0;
         s_spec_fact *body = malloc(body_capacity * sizeof(s_spec_fact));
-        assert(body);
+        if (!body)
+            goto parse_error;
 
         while (1) {
             int is_negated = 0;
@@ -445,7 +517,10 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
             if (body_count >= body_capacity) {
                 body_capacity *= 2;
                 s_spec_fact *new_body = realloc(body, body_capacity * sizeof(s_spec_fact));
-                assert(new_body);
+                if (!new_body) {
+                    free(body);
+                    goto parse_error;
+                }
                 body = new_body;
             }
             body[body_count++] = (s_spec_fact){sub_s, sub_p, sub_o, is_negated ? ":not" : NULL};
@@ -463,14 +538,18 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
             }
         }
 
-        /* Add rule to program */
-        s_datalog_rule *added = datalog_program_add_rule(prog, &head, body, body_count);
-        free(body);
-
-        /* Validate rule */
-        if (!datalog_rule_validate(added)) {
+        /* Validate before mutating the program. */
+        s_datalog_rule candidate = {head, body, body_count};
+        if (!datalog_rule_validate(&candidate)) {
+            free(body);
             goto parse_error;
         }
+
+        if (!datalog_program_add_rule(prog, &head, body, body_count)) {
+            free(body);
+            goto parse_error;
+        }
+        free(body);
     }
 
     for (size_t i = 0; i < count; i++) {
@@ -481,6 +560,7 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
     return 0;
 
 parse_error:
+    datalog_program_truncate(prog, original_rule_count);
     for (size_t i = 0; i < count; i++) {
         if (tokens[i].value)
             free(tokens[i].value);

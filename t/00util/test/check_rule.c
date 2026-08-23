@@ -114,9 +114,20 @@ START_TEST(test_rule_parse_failure)
 
     // 1. Syntax error (missing head object)
     ck_assert_int_eq(-1, datalog_program_parse_rules(prog, "?x <path> :- ?x <edge> ?y ."));
+    ck_assert_int_eq(0, prog->rule_count);
 
     // 2. Safety error (unsafe rule head variable)
     ck_assert_int_eq(-1, datalog_program_parse_rules(prog, "?x <path> ?y :- ?x <edge> ?z ."));
+    ck_assert_int_eq(0, prog->rule_count);
+
+    // 3. A later invalid rule rolls back earlier rules from the same parse call.
+    ck_assert_int_eq(-1, datalog_program_parse_rules(prog, "?x <ok> ?y :- ?x <edge> ?y . ?x <bad> ?y :- ?x <edge> ?z ."));
+    ck_assert_int_eq(0, prog->rule_count);
+
+    // Rules that predate a failed parse call remain intact.
+    ck_assert_int_eq(0, datalog_program_parse_rules(prog, "?x <ok> ?y :- ?x <edge> ?y ."));
+    ck_assert_int_eq(-1, datalog_program_parse_rules(prog, "?x <bad> ?y :- ?x <edge> ?z ."));
+    ck_assert_int_eq(1, prog->rule_count);
 
     delete_datalog_program(prog);
 }

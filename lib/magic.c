@@ -180,8 +180,10 @@ s_datalog_program *datalog_program_magic_transform(const s_datalog_program *prog
                 add_var_to_bound(&bound_vars, &bound_count, orig_rule->head.o);
             }
 
-            char sub_adornments[32][3];
-            int is_sub_idb[32];
+            char(*sub_adornments)[3] = calloc(orig_rule->body_count ? orig_rule->body_count : 1, sizeof(*sub_adornments));
+            int *is_sub_idb = calloc(orig_rule->body_count ? orig_rule->body_count : 1, sizeof(*is_sub_idb));
+            assert(sub_adornments);
+            assert(is_sub_idb);
             for (size_t j = 0; j < orig_rule->body_count; j++) {
                 sub_adornments[j][0] = is_term_bound(orig_rule->body[j].s, bound_vars, bound_count) ? 'b' : 'f';
                 sub_adornments[j][1] = is_term_bound(orig_rule->body[j].o, bound_vars, bound_count) ? 'b' : 'f';
@@ -289,6 +291,8 @@ s_datalog_program *datalog_program_magic_transform(const s_datalog_program *prog
             if (has_magic_head) {
                 free_spec_fact_fields(&magic_head_fact);
             }
+            free(sub_adornments);
+            free(is_sub_idb);
             free(bound_vars);
         }
     }
