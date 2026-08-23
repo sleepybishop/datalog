@@ -26,8 +26,7 @@ static int is_idb_predicate(const s_datalog_program *prog, const char *pred)
     return 0;
 }
 
-static int enqueue_adorned(s_adorned_pred **queue, size_t *count, size_t *capacity, const char *name,
-                           const char *adornment)
+static int enqueue_adorned(s_adorned_pred **queue, size_t *count, size_t *capacity, const char *name, const char *adornment)
 {
     if (!queue || !count || !capacity || !name || !adornment || strlen(adornment) != 2)
         return -1;
@@ -110,8 +109,7 @@ static int add_var_to_bound(const char ***list, size_t *count, const char *var)
     return 0;
 }
 
-static int make_magic_fact(s_spec_fact *fact, const char *pred_name, const char *adornment, const char *s_val,
-                           const char *o_val)
+static int make_magic_fact(s_spec_fact *fact, const char *pred_name, const char *adornment, const char *s_val, const char *o_val)
 {
     memset(fact, 0, sizeof(*fact));
     fact->p = format_name("magic_", pred_name, adornment);
@@ -162,8 +160,7 @@ error:
 static int copy_magic_support(s_spec_fact *dest, const s_spec_fact *source)
 {
     memset(dest, 0, sizeof(*dest));
-    if (copy_string(source->s, &dest->s) != 0 || copy_string(source->p, &dest->p) != 0 ||
-        copy_string(source->o, &dest->o) != 0)
+    if (copy_string(source->s, &dest->s) != 0 || copy_string(source->p, &dest->p) != 0 || copy_string(source->o, &dest->o) != 0)
         goto error;
     return 0;
 
@@ -179,9 +176,8 @@ static void free_spec_fact_array(s_spec_fact *items, size_t count)
     free(items);
 }
 
-static int transform_rule(s_datalog_program *magic_prog, const s_datalog_program *prog,
-                          const s_datalog_rule *orig_rule, const s_adorned_pred *current,
-                          s_adorned_pred **queue, size_t *queue_count, size_t *queue_capacity)
+static int transform_rule(s_datalog_program *magic_prog, const s_datalog_program *prog, const s_datalog_rule *orig_rule,
+                          const s_adorned_pred *current, s_adorned_pred **queue, size_t *queue_count, size_t *queue_capacity)
 {
     const char **bound_vars = NULL;
     size_t bound_count = 0;
@@ -208,15 +204,14 @@ static int transform_rule(s_datalog_program *magic_prog, const s_datalog_program
         sub_adornments[j][1] = is_term_bound(orig_rule->body[j].o, bound_vars, bound_count) ? 'b' : 'f';
         sub_adornments[j][2] = '\0';
         is_sub_idb[j] = is_idb_predicate(prog, orig_rule->body[j].p);
-        if ((is_sub_idb[j] && enqueue_adorned(queue, queue_count, queue_capacity, orig_rule->body[j].p,
-                                              sub_adornments[j]) != 0) ||
+        if ((is_sub_idb[j] && enqueue_adorned(queue, queue_count, queue_capacity, orig_rule->body[j].p, sub_adornments[j]) != 0) ||
             add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].s) != 0 ||
             add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].o) != 0)
             goto cleanup;
     }
 
-    if (has_magic_head && make_magic_fact(&magic_head_fact, current->name, current->adornment,
-                                           orig_rule->head.s, orig_rule->head.o) != 0)
+    if (has_magic_head &&
+        make_magic_fact(&magic_head_fact, current->name, current->adornment, orig_rule->head.s, orig_rule->head.o) != 0)
         goto cleanup;
 
     free(bound_vars);
@@ -232,9 +227,8 @@ static int transform_rule(s_datalog_program *magic_prog, const s_datalog_program
             size_t magic_body_count = (has_magic_head ? 1 : 0) + j;
             s_spec_fact *magic_body = magic_body_count ? calloc(magic_body_count, sizeof(*magic_body)) : NULL;
             size_t initialized = 0;
-            if ((magic_body_count && !magic_body) ||
-                make_magic_fact(&magic_rule_head, orig_rule->body[j].p, sub_adornments[j],
-                                orig_rule->body[j].s, orig_rule->body[j].o) != 0)
+            if ((magic_body_count && !magic_body) || make_magic_fact(&magic_rule_head, orig_rule->body[j].p, sub_adornments[j],
+                                                                     orig_rule->body[j].s, orig_rule->body[j].o) != 0)
                 goto magic_rule_error;
             if (has_magic_head) {
                 if (copy_magic_support(&magic_body[initialized], &magic_head_fact) != 0)
@@ -242,8 +236,7 @@ static int transform_rule(s_datalog_program *magic_prog, const s_datalog_program
                 initialized++;
             }
             for (size_t k = 0; k < j; k++) {
-                if (make_adorned_subgoal(&magic_body[initialized], &orig_rule->body[k], is_sub_idb[k],
-                                         sub_adornments[k]) != 0)
+                if (make_adorned_subgoal(&magic_body[initialized], &orig_rule->body[k], is_sub_idb[k], sub_adornments[k]) != 0)
                     goto magic_rule_error;
                 initialized++;
             }
@@ -253,12 +246,12 @@ static int transform_rule(s_datalog_program *magic_prog, const s_datalog_program
             free_spec_fact_array(magic_body, initialized);
             goto magic_rule_done;
 
-magic_rule_error:
+        magic_rule_error:
             free_spec_fact_fields(&magic_rule_head);
             free_spec_fact_array(magic_body, initialized);
             goto cleanup;
         }
-magic_rule_done:
+    magic_rule_done:
         if (add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].s) != 0 ||
             add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].o) != 0)
             goto cleanup;
@@ -282,8 +275,7 @@ magic_rule_done:
         initialized++;
     }
     for (size_t j = 0; j < orig_rule->body_count; j++) {
-        if (make_adorned_subgoal(&rewritten_body[initialized], &orig_rule->body[j], is_sub_idb[j],
-                                 sub_adornments[j]) != 0)
+        if (make_adorned_subgoal(&rewritten_body[initialized], &orig_rule->body[j], is_sub_idb[j], sub_adornments[j]) != 0)
             goto rewritten_error;
         initialized++;
     }
@@ -308,11 +300,7 @@ s_datalog_program *datalog_program_magic_transform(const s_datalog_program *prog
     if (!prog || !query_goal || !query_goal->s || !query_goal->p || !query_goal->o || is_variable(query_goal->p))
         return NULL;
 
-    char initial_adornment[3] = {
-        is_variable(query_goal->s) ? 'f' : 'b',
-        is_variable(query_goal->o) ? 'f' : 'b',
-        '\0'
-    };
+    char initial_adornment[3] = {is_variable(query_goal->s) ? 'f' : 'b', is_variable(query_goal->o) ? 'f' : 'b', '\0'};
     s_adorned_pred *queue = NULL;
     size_t queue_count = 0;
     size_t queue_capacity = 0;

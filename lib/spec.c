@@ -184,8 +184,7 @@ s_binding *spec_bindings(p_spec spec)
     if (!spec || !spec[0])
         return NULL;
     count = spec_count_bindings(spec);
-    if (count == SIZE_MAX || count + 1 > SIZE_MAX / sizeof(s_binding) ||
-        count > SIZE_MAX / sizeof(char *))
+    if (count == SIZE_MAX || count + 1 > SIZE_MAX / sizeof(s_binding) || count > SIZE_MAX / sizeof(char *))
         return NULL;
     bindings_size = (count + 1) * sizeof(s_binding);
     vars_size = count * sizeof(char *);

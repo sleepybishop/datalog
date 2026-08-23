@@ -1202,8 +1202,7 @@ int facts_with_cursor_next(s_facts_with_cursor *c)
                     c->sorted_matches = resized;
                 }
                 s_cached_match *matches = (s_cached_match *)c->sorted_matches;
-                matches[c->sorted_count].values =
-                    bindings_count ? malloc((size_t)bindings_count * sizeof(const char *)) : NULL;
+                matches[c->sorted_count].values = bindings_count ? malloc((size_t)bindings_count * sizeof(const char *)) : NULL;
                 if (bindings_count && !matches[c->sorted_count].values) {
                     c->error = -1;
                     break;

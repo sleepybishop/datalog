@@ -148,13 +148,11 @@ void justification_support_array_destroy(s_justification_support *items, size_t 
     free(items);
 }
 
-static int justification_uses_support(const s_justification *item, const char *s, const char *p, const char *o,
-                                      int negated)
+static int justification_uses_support(const s_justification *item, const char *s, const char *p, const char *o, int negated)
 {
     for (size_t i = 0; i < item->support_count; i++) {
         const s_justification_support *support = &item->supports[i];
-        if (support->negated == negated && strcmp(support->s, s) == 0 && strcmp(support->p, p) == 0 &&
-            strcmp(support->o, o) == 0)
+        if (support->negated == negated && strcmp(support->s, s) == 0 && strcmp(support->p, p) == 0 && strcmp(support->o, o) == 0)
             return 1;
     }
     return 0;
@@ -163,8 +161,7 @@ static int justification_uses_support(const s_justification *item, const char *s
 static int conclusion_append(s_justification_support **items, size_t *count, const s_justification *proof)
 {
     for (size_t i = 0; i < *count; i++) {
-        if (strcmp((*items)[i].s, proof->s) == 0 && strcmp((*items)[i].p, proof->p) == 0 &&
-            strcmp((*items)[i].o, proof->o) == 0)
+        if (strcmp((*items)[i].s, proof->s) == 0 && strcmp((*items)[i].p, proof->p) == 0 && strcmp((*items)[i].o, proof->o) == 0)
             return 0;
     }
     if (*count == SIZE_MAX / sizeof(**items))
@@ -189,9 +186,8 @@ static int conclusion_append(s_justification_support **items, size_t *count, con
     return 0;
 }
 
-int justification_graph_remove_support(s_justification_graph *graph, const char *s, const char *p, const char *o,
-                                       int negated, s_justification_support **conclusions_out,
-                                       size_t *conclusion_count_out)
+int justification_graph_remove_support(s_justification_graph *graph, const char *s, const char *p, const char *o, int negated,
+                                       s_justification_support **conclusions_out, size_t *conclusion_count_out)
 {
     if (!graph || !s || !p || !o || !conclusions_out || !conclusion_count_out)
         return -1;

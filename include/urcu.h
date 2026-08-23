@@ -156,8 +156,7 @@ void urcu_init(urcu_t *rcu, int initial_capacity)
 
 int urcu_init_checked(urcu_t *rcu, int initial_capacity)
 {
-    if (!rcu || initial_capacity < 0 ||
-        (size_t)initial_capacity > SIZE_MAX / sizeof(urcu_retired_t))
+    if (!rcu || initial_capacity < 0 || (size_t)initial_capacity > SIZE_MAX / sizeof(urcu_retired_t))
         return -1;
     memset(rcu, 0, sizeof(*rcu));
     rcu->global_epoch = 1;

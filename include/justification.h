@@ -38,9 +38,8 @@ size_t justification_graph_count(const s_justification_graph *graph, const char 
  * *conclusions_out owns a deduplicated array of affected conclusion triples;
  * release it with justification_support_array_destroy().
  */
-int justification_graph_remove_support(s_justification_graph *graph, const char *s, const char *p, const char *o,
-                                       int negated, s_justification_support **conclusions_out,
-                                       size_t *conclusion_count_out);
+int justification_graph_remove_support(s_justification_graph *graph, const char *s, const char *p, const char *o, int negated,
+                                       s_justification_support **conclusions_out, size_t *conclusion_count_out);
 void justification_support_array_destroy(s_justification_support *items, size_t count);
 
 #endif

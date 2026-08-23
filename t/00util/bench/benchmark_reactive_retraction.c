@@ -38,8 +38,7 @@ int main(void)
 {
     s_facts *facts = new_facts(NULL, FACT_COUNT * 4);
     s_datalog_program *program = new_datalog_program();
-    if (!facts || !program ||
-        datalog_program_parse_rules(program, "?X <derived> yes :- ?X <source> yes .\n") != 0)
+    if (!facts || !program || datalog_program_parse_rules(program, "?X <derived> yes :- ?X <source> yes .\n") != 0)
         return 1;
 
     char subject[32];
@@ -58,12 +57,11 @@ int main(void)
         snprintf(subject, sizeof(subject), "item-%d", i);
         physical_changes = 0;
         long long start = monotonic_ns();
-        if (start < 0 || facts_transaction_begin(facts) != 0 ||
-            facts_remove_spo(facts, subject, "source", "yes") != 1 || facts_transaction_commit(facts) != 0)
+        if (start < 0 || facts_transaction_begin(facts) != 0 || facts_remove_spo(facts, subject, "source", "yes") != 1 ||
+            facts_transaction_commit(facts) != 0)
             return 1;
         samples[i] = monotonic_ns() - start;
-        if (samples[i] < 0 || physical_changes != 2 ||
-            facts_contains_spo(facts, subject, "derived", "yes") != 0)
+        if (samples[i] < 0 || physical_changes != 2 || facts_contains_spo(facts, subject, "derived", "yes") != 0)
             return 1;
         if (facts_transaction_begin(facts) != 0 || !facts_add_spo(facts, subject, "source", "yes") ||
             facts_transaction_commit(facts) != 0)
@@ -76,8 +74,8 @@ int main(void)
     struct rusage usage;
     if (getrusage(RUSAGE_SELF, &usage) != 0)
         return 1;
-    printf("reactive retraction: facts=%d samples=%d p50=%.3fms p95=%.3fms peak_rss=%ldKB\n", FACT_COUNT,
-           SAMPLES, p50 / 1000000.0, p95 / 1000000.0, usage.ru_maxrss);
+    printf("reactive retraction: facts=%d samples=%d p50=%.3fms p95=%.3fms peak_rss=%ldKB\n", FACT_COUNT, SAMPLES, p50 / 1000000.0,
+           p95 / 1000000.0, usage.ru_maxrss);
 
     int failed = p95 > P95_LIMIT_NS || usage.ru_maxrss > RSS_LIMIT_KB;
     delete_facts(facts);

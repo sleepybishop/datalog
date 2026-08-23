@@ -1028,12 +1028,12 @@ static void invalidation_events_destroy(s_invalidation_event *events, size_t cou
     free(events);
 }
 
-static int invalidation_event_append(s_invalidation_event **events, size_t *count, const char *s, const char *p,
-                                     const char *o, int negated)
+static int invalidation_event_append(s_invalidation_event **events, size_t *count, const char *s, const char *p, const char *o,
+                                     int negated)
 {
     for (size_t i = 0; i < *count; i++) {
-        if ((*events)[i].negated == negated && strcmp((*events)[i].s, s) == 0 &&
-            strcmp((*events)[i].p, p) == 0 && strcmp((*events)[i].o, o) == 0)
+        if ((*events)[i].negated == negated && strcmp((*events)[i].s, s) == 0 && strcmp((*events)[i].p, p) == 0 &&
+            strcmp((*events)[i].o, o) == 0)
             return 0;
     }
     if (*count == SIZE_MAX / sizeof(**events))
@@ -1068,12 +1068,12 @@ static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entr
     for (size_t i = 0; i < entry_count; i++) {
         if (entries[i].action == ROLLBACK_ADD) {
             *requires_closure_scan = 1;
-            if (invalidation_event_append(&events, &event_count, symbol_to_str(entries[i].fact.s),
-                                          symbol_to_str(entries[i].fact.p), symbol_to_str(entries[i].fact.o), 0) != 0)
+            if (invalidation_event_append(&events, &event_count, symbol_to_str(entries[i].fact.s), symbol_to_str(entries[i].fact.p),
+                                          symbol_to_str(entries[i].fact.o), 0) != 0)
                 goto error;
         } else if (entries[i].action == ROLLBACK_REMOVE) {
-            if (invalidation_event_append(&events, &event_count, symbol_to_str(entries[i].fact.s),
-                                          symbol_to_str(entries[i].fact.p), symbol_to_str(entries[i].fact.o), 1) != 0)
+            if (invalidation_event_append(&events, &event_count, symbol_to_str(entries[i].fact.s), symbol_to_str(entries[i].fact.p),
+                                          symbol_to_str(entries[i].fact.o), 1) != 0)
                 goto error;
         }
     }
@@ -1081,9 +1081,8 @@ static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entr
     for (size_t cursor = 0; cursor < event_count; cursor++) {
         s_justification_support *conclusions = NULL;
         size_t conclusion_count = 0;
-        int removed = justification_graph_remove_support(
-            facts->justifications_staging, events[cursor].s, events[cursor].p, events[cursor].o,
-            events[cursor].negated, &conclusions, &conclusion_count);
+        int removed = justification_graph_remove_support(facts->justifications_staging, events[cursor].s, events[cursor].p,
+                                                         events[cursor].o, events[cursor].negated, &conclusions, &conclusion_count);
         if (removed < 0) {
             justification_support_array_destroy(conclusions, conclusion_count);
             goto error;
@@ -1093,8 +1092,7 @@ static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entr
 
         for (size_t i = 0; i < conclusion_count; i++) {
             s_justification_support *conclusion = &conclusions[i];
-            if (justification_graph_count(facts->justifications_staging, conclusion->s, conclusion->p,
-                                          conclusion->o) != 0)
+            if (justification_graph_count(facts->justifications_staging, conclusion->s, conclusion->p, conclusion->o) != 0)
                 continue;
             s_fact_support support;
             int found = facts_get_support_spo(facts, conclusion->s, conclusion->p, conclusion->o, &support);
@@ -1104,13 +1102,12 @@ static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entr
             }
             if (found > 0 && support.derived) {
                 int disappears = support.asserted == 0;
-                if (facts_remove_spo_origin(facts, conclusion->s, conclusion->p, conclusion->o,
-                                            FACT_ORIGIN_DERIVED) < 0) {
+                if (facts_remove_spo_origin(facts, conclusion->s, conclusion->p, conclusion->o, FACT_ORIGIN_DERIVED) < 0) {
                     justification_support_array_destroy(conclusions, conclusion_count);
                     goto error;
                 }
-                if (disappears && invalidation_event_append(&events, &event_count, conclusion->s, conclusion->p,
-                                                            conclusion->o, 0) != 0) {
+                if (disappears &&
+                    invalidation_event_append(&events, &event_count, conclusion->s, conclusion->p, conclusion->o, 0) != 0) {
                     justification_support_array_destroy(conclusions, conclusion_count);
                     goto error;
                 }
