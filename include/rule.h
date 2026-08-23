@@ -69,7 +69,7 @@ int *datalog_program_stratify(const s_datalog_program *prog, int *num_strata_out
  * 1. Every variable in the head must appear in at least one positive subgoal.
  * 2. Every variable in a negated subgoal must appear in at least one positive subgoal.
  *
- * Returns 1 if safe, 0 if unsafe.
+ * Returns 1 if safe, 0 if unsafe, and -1 on allocation failure.
  */
 int datalog_rule_validate(const s_datalog_rule *rule);
 

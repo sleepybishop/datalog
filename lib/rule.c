@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <assert.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "rule.h"
@@ -78,6 +79,8 @@ s_datalog_rule *datalog_program_add_rule(s_datalog_program *prog, const s_spec_f
     assert(head);
     assert(body || body_count == 0);
 
+    if (prog->rule_count == SIZE_MAX || prog->rule_count + 1 > SIZE_MAX / sizeof(s_datalog_rule))
+        return NULL;
     s_datalog_rule *new_rules = realloc(prog->rules, (prog->rule_count + 1) * sizeof(s_datalog_rule));
     if (!new_rules)
         return NULL;
@@ -134,18 +137,22 @@ static int is_variable(const char *str)
     return str && str[0] == '?';
 }
 
-static void add_var_to_list(const char ***list, size_t *count, const char *var)
+static int add_var_to_list(const char ***list, size_t *count, const char *var)
 {
     for (size_t i = 0; i < *count; i++) {
         if (strcmp((*list)[i], var) == 0) {
-            return;
+            return 0;
         }
     }
+    if (*count == SIZE_MAX / sizeof(char *))
+        return -1;
     const char **new_list = realloc(*list, (*count + 1) * sizeof(char *));
-    assert(new_list);
+    if (!new_list)
+        return -1;
     *list = new_list;
     (*list)[*count] = var;
     (*count)++;
+    return 0;
 }
 
 static int list_contains(const char **list, size_t count, const char *var)
@@ -169,12 +176,12 @@ int datalog_rule_validate(const s_datalog_rule *rule)
     for (size_t i = 0; i < rule->body_count; i++) {
         const s_spec_fact *sub = &rule->body[i];
         if (sub->negated == NULL) {
-            if (is_variable(sub->s))
-                add_var_to_list(&pos_vars, &pos_vars_count, sub->s);
-            if (is_variable(sub->p))
-                add_var_to_list(&pos_vars, &pos_vars_count, sub->p);
-            if (is_variable(sub->o))
-                add_var_to_list(&pos_vars, &pos_vars_count, sub->o);
+            if ((is_variable(sub->s) && add_var_to_list(&pos_vars, &pos_vars_count, sub->s) != 0) ||
+                (is_variable(sub->p) && add_var_to_list(&pos_vars, &pos_vars_count, sub->p) != 0) ||
+                (is_variable(sub->o) && add_var_to_list(&pos_vars, &pos_vars_count, sub->o) != 0)) {
+                free(pos_vars);
+                return -1;
+            }
         }
     }
 
@@ -557,7 +564,7 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
 
         /* Validate before mutating the program. */
         s_datalog_rule candidate = {head, body, body_count};
-        if (!datalog_rule_validate(&candidate)) {
+        if (datalog_rule_validate(&candidate) != 1) {
             free(body);
             goto parse_error;
         }
@@ -586,20 +593,24 @@ parse_error:
     return -1;
 }
 
-static void add_pred_to_list(const char ***list, size_t *count, const char *pred)
+static int add_pred_to_list(const char ***list, size_t *count, const char *pred)
 {
     if (!pred)
-        return;
+        return 0;
     for (size_t i = 0; i < *count; i++) {
         if (strcmp((*list)[i], pred) == 0) {
-            return;
+            return 0;
         }
     }
+    if (*count == SIZE_MAX / sizeof(char *))
+        return -1;
     const char **new_list = realloc(*list, (*count + 1) * sizeof(char *));
-    assert(new_list);
+    if (!new_list)
+        return -1;
     *list = new_list;
     (*list)[*count] = pred;
     (*count)++;
+    return 0;
 }
 
 static int find_pred_idx(const char **preds, size_t pred_count, const char *pred)
@@ -630,12 +641,14 @@ int *datalog_program_stratify(const s_datalog_program *prog, int *num_strata_out
     for (size_t i = 0; i < prog->rule_count; i++) {
         const s_datalog_rule *rule = &prog->rules[i];
         if (rule->head.p && rule->head.p[0] != '?') {
-            add_pred_to_list(&preds, &pred_count, rule->head.p);
+            if (add_pred_to_list(&preds, &pred_count, rule->head.p) != 0)
+                goto allocation_error;
         }
         for (size_t j = 0; j < rule->body_count; j++) {
             const s_spec_fact *sub = &rule->body[j];
             if (sub->p && sub->p[0] != '?') {
-                add_pred_to_list(&preds, &pred_count, sub->p);
+                if (add_pred_to_list(&preds, &pred_count, sub->p) != 0)
+                    goto allocation_error;
             }
         }
     }
@@ -646,7 +659,8 @@ int *datalog_program_stratify(const s_datalog_program *prog, int *num_strata_out
 
     /* 2. Initialize stratum values to 0 for all predicates */
     int *stratum = calloc(pred_count, sizeof(int));
-    assert(stratum);
+    if (!stratum)
+        goto allocation_error;
 
     /* 3. Run fixed-point iteration for stratum propagation */
     /* We run it pred_count + 1 times. If stratum values change in the last iteration,
@@ -694,7 +708,11 @@ int *datalog_program_stratify(const s_datalog_program *prog, int *num_strata_out
     /* Determine the number of strata and rule strata mapping */
     int max_stratum = 0;
     int *rule_strata = malloc(prog->rule_count * sizeof(int));
-    assert(rule_strata);
+    if (!rule_strata) {
+        free(stratum);
+        free(preds);
+        return NULL;
+    }
 
     for (size_t r = 0; r < prog->rule_count; r++) {
         const s_datalog_rule *rule = &prog->rules[r];
@@ -711,4 +729,8 @@ int *datalog_program_stratify(const s_datalog_program *prog, int *num_strata_out
     free(stratum);
     free(preds);
     return rule_strata;
+
+allocation_error:
+    free(preds);
+    return NULL;
 }
