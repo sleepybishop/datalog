@@ -37,6 +37,19 @@ START_TEST(test_magic_sets_transformation)
 }
 END_TEST
 
+START_TEST(test_magic_sets_rejects_invalid_goal)
+{
+    s_datalog_program *prog = new_datalog_program();
+    ck_assert(prog);
+    s_spec_fact variable_predicate = {"alice", "?predicate", "?object", NULL};
+    s_spec_fact missing_subject = {NULL, "path", "?object", NULL};
+    ck_assert_ptr_eq(datalog_program_magic_transform(prog, &variable_predicate), NULL);
+    ck_assert_ptr_eq(datalog_program_magic_transform(prog, &missing_subject), NULL);
+    ck_assert_ptr_eq(datalog_program_magic_transform(NULL, &variable_predicate), NULL);
+    delete_datalog_program(prog);
+}
+END_TEST
+
 Suite *magic_suite(void)
 {
     Suite *s;
@@ -46,6 +59,7 @@ Suite *magic_suite(void)
     tc_core = tcase_create("Core");
 
     tcase_add_test(tc_core, test_magic_sets_transformation);
+    tcase_add_test(tc_core, test_magic_sets_rejects_invalid_goal);
 
     suite_add_tcase(s, tc_core);
     return s;
