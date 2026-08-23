@@ -1,6 +1,8 @@
 #include "linda.h"
 #include "binding.h"
+#include "facts_internal.h"
 #include <errno.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -14,11 +16,83 @@ struct linda_pattern {
     unsigned int cond_index;
 };
 
+typedef struct linda_entry {
+    Symbol s;
+    Symbol p;
+    Symbol o;
+    size_t count;
+} s_linda_entry;
+
+struct linda_space {
+    s_intern *sym;
+    s_facts *db;
+    /* Counts above the database's implicit single asserted occurrence. */
+    s_set multiplicity;
+    pthread_mutex_t locks[LINDA_COND_PARTITIONS];
+    pthread_cond_t conds[LINDA_COND_PARTITIONS];
+    pthread_mutex_t worker_lock;
+    pthread_cond_t worker_cond;
+    size_t active_workers;
+    int shutting_down;
+};
+
+#define LINDA_ENTRY_KEY_SIZE (sizeof(Symbol) * 3)
+
 _Static_assert(LINDA_COND_PARTITIONS == FACTS_COMMIT_PARTITIONS, "Linda and commit partitions must match");
 
 static unsigned int get_linda_cond_idx(const char *s)
 {
     return facts_commit_subject_partition(s);
+}
+
+static s_set_item *linda_entry_item(s_linda_space *space, const s_fact *fact)
+{
+    s_linda_entry key = {.s = fact->s, .p = fact->p, .o = fact->o, .count = 0};
+    return set_get(&space->multiplicity, &key, LINDA_ENTRY_KEY_SIZE);
+}
+
+static s_linda_entry *linda_entry_get(s_linda_space *space, const s_fact *fact)
+{
+    s_set_item *item = linda_entry_item(space, fact);
+    return item ? (s_linda_entry *)item->data : NULL;
+}
+
+static s_linda_entry *linda_entry_add(s_linda_space *space, const s_fact *fact, size_t count)
+{
+    s_linda_entry *entry = malloc(sizeof(*entry));
+    if (!entry)
+        return NULL;
+    entry->s = facts_intern(space->db, symbol_to_str(fact->s));
+    entry->p = facts_intern(space->db, symbol_to_str(fact->p));
+    entry->o = facts_intern(space->db, symbol_to_str(fact->o));
+    entry->count = count;
+    set_add(&space->multiplicity, entry, LINDA_ENTRY_KEY_SIZE);
+    return entry;
+}
+
+static void linda_entry_remove(s_linda_space *space, const s_fact *fact)
+{
+    s_set_item *item = linda_entry_item(space, fact);
+    if (!item)
+        return;
+    s_linda_entry *entry = (s_linda_entry *)item->data;
+    set_remove(&space->multiplicity, item);
+    facts_unintern(space->db, entry->s);
+    facts_unintern(space->db, entry->p);
+    facts_unintern(space->db, entry->o);
+    free(entry);
+}
+
+static void linda_signal_subject(s_linda_space *space, const char *subject)
+{
+    unsigned int partitions[2] = {0, get_linda_cond_idx(subject)};
+    size_t count = partitions[1] == 0 ? 1 : 2;
+    for (size_t i = 0; i < count; i++) {
+        unsigned int partition = partitions[i];
+        pthread_mutex_lock(&space->locks[partition]);
+        pthread_cond_broadcast(&space->conds[partition]);
+        pthread_mutex_unlock(&space->locks[partition]);
+    }
 }
 
 static int linda_pattern_init(s_linda_pattern *pattern, const char *s, const char *p, const char *o, int copy_terms)
@@ -164,8 +238,24 @@ s_linda_space *new_linda_space(unsigned long max_symbols)
         }
     }
     pthread_condattr_destroy(&cond_attr);
-    facts_register_commit_summary_observer(space->db, linda_commit_observer, space);
+    set_init(&space->multiplicity, max_symbols);
+    facts_register_internal_commit_summary_observer(space->db, linda_commit_observer, space);
     return space;
+}
+
+s_facts *linda_space_facts(s_linda_space *space)
+{
+    return space ? space->db : NULL;
+}
+
+int linda_space_attach_program(s_linda_space *space, const s_datalog_program *program)
+{
+    return space ? facts_attach_program(space->db, program) : -1;
+}
+
+int linda_space_detach_program(s_linda_space *space)
+{
+    return space ? facts_detach_program(space->db) : -1;
 }
 
 void delete_linda_space(s_linda_space *space)
@@ -177,7 +267,18 @@ void delete_linda_space(s_linda_space *space)
     while (space->active_workers > 0)
         pthread_cond_wait(&space->worker_cond, &space->worker_lock);
     pthread_mutex_unlock(&space->worker_lock);
-    facts_register_commit_summary_observer(space->db, NULL, NULL);
+    facts_register_internal_commit_summary_observer(space->db, NULL, NULL);
+    s_set_cursor cursor;
+    set_cursor_init(&space->multiplicity, &cursor);
+    s_set_item *item;
+    while ((item = set_cursor_next(&cursor)) != NULL) {
+        s_linda_entry *entry = (s_linda_entry *)item->data;
+        intern_unstring(space->sym, entry->s);
+        intern_unstring(space->sym, entry->p);
+        intern_unstring(space->sym, entry->o);
+        free(entry);
+    }
+    set_destroy(&space->multiplicity);
     for (size_t i = 0; i < LINDA_COND_PARTITIONS; i++) {
         pthread_cond_destroy(&space->conds[i]);
         pthread_mutex_destroy(&space->locks[i]);
@@ -195,14 +296,35 @@ int linda_out(s_linda_space *space, const char *s, const char *p, const char *o)
         return LINDA_ERROR;
     if (facts_transaction_begin(space->db) != 0)
         return LINDA_ERROR;
-    if (!facts_add_spo(space->db, s, p, o)) {
+    s_fact_support support;
+    int existed = facts_get_support_spo(space->db, s, p, o, &support);
+    s_fact *fact = facts_add_spo(space->db, s, p, o);
+    if (!fact) {
         facts_transaction_rollback(space->db);
         return LINDA_ERROR;
+    }
+    s_linda_entry *entry = linda_entry_get(space, fact);
+    if (existed > 0 && support.asserted) {
+        if (entry) {
+            if (entry->count == SIZE_MAX) {
+                facts_transaction_rollback(space->db);
+                return LINDA_ERROR;
+            }
+            entry->count++;
+        } else if (!linda_entry_add(space, fact, 2)) {
+            facts_transaction_rollback(space->db);
+            return LINDA_ERROR;
+        }
+    } else if (entry) {
+        /* Discard stale overlay state left by unsupported direct DB mutation. */
+        linda_entry_remove(space, fact);
     }
     if (facts_transaction_commit(space->db) != 0) {
         facts_transaction_rollback(space->db);
         return LINDA_ERROR;
     }
+    /* Duplicate out() changes multiplicity without changing physical visibility. */
+    linda_signal_subject(space, s);
     return LINDA_OK;
 }
 
@@ -233,6 +355,11 @@ static int match_and_extract(s_linda_space *space, const s_linda_pattern *patter
     const char *matched[3] = {NULL, NULL, NULL};
     while (facts_with_cursor_next(&cursor)) {
         s_fact *fact = cursor.l[0].fact;
+        if (!fact->asserted_count)
+            continue;
+        s_linda_entry *entry = linda_entry_get(space, fact);
+        if (entry && entry->count == 0)
+            continue;
         matched[0] = symbol_to_str(fact->s);
         matched[1] = symbol_to_str(fact->p);
         matched[2] = symbol_to_str(fact->o);
@@ -264,6 +391,24 @@ static int match_and_extract(s_linda_space *space, const s_linda_pattern *patter
     }
     facts_with_cursor_destroy(&cursor);
     return found;
+}
+
+static int linda_consume_one(s_linda_space *space, const char *s, const char *p, const char *o)
+{
+    s_fact *fact = facts_get_spo(space->db, s, p, o);
+    if (!fact || !fact->asserted_count)
+        return 0;
+    s_linda_entry *entry = linda_entry_get(space, fact);
+    if (entry) {
+        if (entry->count > 2) {
+            entry->count--;
+        } else {
+            /* Count two becomes the database's implicit single occurrence. */
+            linda_entry_remove(space, fact);
+        }
+        return 1;
+    }
+    return facts_remove_spo(space->db, s, p, o);
 }
 
 static int make_deadline(long timeout_ms, struct timespec *deadline)
@@ -330,7 +475,7 @@ static int linda_in_wait(s_linda_space *space, const s_linda_pattern *pattern, c
             return LINDA_ERROR;
         }
         if (found) {
-            int removed = facts_remove_spo(space->db, match_s, match_p, match_o);
+            int removed = linda_consume_one(space, match_s, match_p, match_o);
             pthread_mutex_unlock(&space->locks[idx]);
             if (!removed || facts_transaction_commit(space->db) != 0) {
                 facts_transaction_rollback(space->db);
@@ -405,7 +550,7 @@ int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char
         facts_transaction_rollback(space->db);
         return LINDA_ERROR;
     }
-    if (found && !facts_remove_spo(space->db, match_s, match_p, match_o)) {
+    if (found && linda_consume_one(space, match_s, match_p, match_o) <= 0) {
         facts_transaction_rollback(space->db);
         return LINDA_ERROR;
     }

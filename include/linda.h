@@ -2,7 +2,6 @@
 #define LINDA_H
 
 #include "facts.h"
-#include <pthread.h>
 
 /*
  * Linda Coordination Tuplespace wrapper.
@@ -14,17 +13,7 @@
 #define LINDA_ERROR -1
 
 typedef struct linda_pattern s_linda_pattern;
-
-typedef struct {
-    s_intern *sym;
-    s_facts *db;
-    pthread_mutex_t locks[LINDA_COND_PARTITIONS];
-    pthread_cond_t conds[LINDA_COND_PARTITIONS];
-    pthread_mutex_t worker_lock;
-    pthread_cond_t worker_cond;
-    size_t active_workers;
-    int shutting_down;
-} s_linda_space;
+typedef struct linda_space s_linda_space;
 
 /* Allocate and initialize a new Linda Tuplespace */
 s_linda_space *new_linda_space(unsigned long max_symbols);
@@ -32,11 +21,25 @@ s_linda_space *new_linda_space(unsigned long max_symbols);
 /* Free the Linda Tuplespace and its internal database */
 void delete_linda_space(s_linda_space *space);
 
+/*
+ * Advanced interoperability escape hatch. The returned database is borrowed
+ * and remains owned by space. Prefer Linda operations for coordination tuples.
+ */
+s_facts *linda_space_facts(s_linda_space *space);
+
+/* Attach or detach a managed reactive program on the shared fact runtime. */
+int linda_space_attach_program(s_linda_space *space, const s_datalog_program *program);
+int linda_space_detach_program(s_linda_space *space);
+
 /* Compile and own a reusable tuple pattern. Safe to use concurrently. */
 s_linda_pattern *new_linda_pattern(const char *s, const char *p, const char *o);
 void delete_linda_pattern(s_linda_pattern *pattern);
 
-/* Linda out(S, P, O) - Non-blocking insertion of a tuple */
+/*
+ * Linda out(S, P, O) - Non-blocking insertion of one tuple occurrence.
+ * Equal tuples are retained as distinct consumable occurrences. Facts carrying
+ * derived support only are intentionally outside the Linda coordination view.
+ */
 int linda_out(s_linda_space *space, const char *s, const char *p, const char *o);
 
 /* Linda rd(S, P, O, out_s, out_p, out_o) - Blocking read of a matching tuple */
