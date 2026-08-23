@@ -31,6 +31,8 @@
 #define URCU_THREAD_LOCAL __thread
 #endif
 
+typedef struct urcu_context urcu_t;
+
 typedef struct {
     uint64_t epoch;
     bool active;
@@ -44,19 +46,23 @@ typedef struct {
     uint64_t epoch;
 } urcu_retired_t;
 
-typedef struct {
+typedef struct urcu_registration {
+    urcu_t *rcu;
+    int idx;
+    unsigned int depth;
+} urcu_registration_t;
+
+struct urcu_context {
     uint64_t global_epoch;
     urcu_reader_t readers[URCU_MAX_THREADS];
     pthread_mutex_t registry_mutex;
+    pthread_key_t registration_key;
 
     /* Retired objects waiting for reclamation (Single-Writer Model) */
     urcu_retired_t *retired_queue;
     int retired_count;
     int retired_capacity;
-} urcu_t;
-
-/* Thread-local registration index */
-extern URCU_THREAD_LOCAL int urcu_thread_idx;
+};
 
 #ifdef __cplusplus
 extern "C" {
@@ -77,11 +83,14 @@ void urcu_unregister_thread(urcu_t *rcu);
 /* Enter an RCU read-side critical section (lock-free) */
 static inline void urcu_read_lock(urcu_t *rcu)
 {
-    int idx = urcu_thread_idx;
-    if (idx < 0) {
-        idx = urcu_register_thread(rcu);
+    urcu_registration_t *registration = pthread_getspecific(rcu->registration_key);
+    if (!registration) {
+        if (urcu_register_thread(rcu) < 0)
+            return;
+        registration = pthread_getspecific(rcu->registration_key);
     }
-    if (idx >= 0) {
+    if (registration && registration->depth++ == 0) {
+        int idx = registration->idx;
         uint64_t g_epoch = __atomic_load_n(&rcu->global_epoch, __ATOMIC_ACQUIRE);
         __atomic_store_n(&rcu->readers[idx].epoch, g_epoch, __ATOMIC_RELEASE);
         __atomic_store_n(&rcu->readers[idx].active, true, __ATOMIC_RELEASE);
@@ -91,9 +100,9 @@ static inline void urcu_read_lock(urcu_t *rcu)
 /* Exit an RCU read-side critical section (lock-free) */
 static inline void urcu_read_unlock(urcu_t *rcu)
 {
-    int idx = urcu_thread_idx;
-    if (idx >= 0) {
-        __atomic_store_n(&rcu->readers[idx].active, false, __ATOMIC_RELEASE);
+    urcu_registration_t *registration = pthread_getspecific(rcu->registration_key);
+    if (registration && registration->depth > 0 && --registration->depth == 0) {
+        __atomic_store_n(&rcu->readers[registration->idx].active, false, __ATOMIC_RELEASE);
     }
 }
 
@@ -114,7 +123,18 @@ void urcu_synchronize(urcu_t *rcu);
 
 #ifdef URCU_IMPLEMENTATION
 
-URCU_THREAD_LOCAL int urcu_thread_idx = -1;
+static void urcu_registration_destroy(void *ptr)
+{
+    urcu_registration_t *registration = ptr;
+    if (!registration)
+        return;
+    urcu_t *rcu = registration->rcu;
+    pthread_mutex_lock(&rcu->registry_mutex);
+    __atomic_store_n(&rcu->readers[registration->idx].active, false, __ATOMIC_RELEASE);
+    rcu->readers[registration->idx].epoch = 0;
+    pthread_mutex_unlock(&rcu->registry_mutex);
+    free(registration);
+}
 
 void urcu_init(urcu_t *rcu, int initial_capacity)
 {
@@ -124,6 +144,7 @@ void urcu_init(urcu_t *rcu, int initial_capacity)
         rcu->readers[i].active = false;
     }
     pthread_mutex_init(&rcu->registry_mutex, NULL);
+    pthread_key_create(&rcu->registration_key, urcu_registration_destroy);
     rcu->retired_count = 0;
     rcu->retired_capacity = initial_capacity;
     if (initial_capacity > 0) {
@@ -145,11 +166,20 @@ void urcu_destroy(urcu_t *rcu)
         }
         free(rcu->retired_queue);
     }
+    urcu_unregister_thread(rcu);
+    pthread_key_delete(rcu->registration_key);
     pthread_mutex_destroy(&rcu->registry_mutex);
 }
 
 int urcu_register_thread(urcu_t *rcu)
 {
+    urcu_registration_t *existing = pthread_getspecific(rcu->registration_key);
+    if (existing)
+        return existing->idx;
+
+    urcu_registration_t *registration = malloc(sizeof(*registration));
+    if (!registration)
+        return -1;
     pthread_mutex_lock(&rcu->registry_mutex);
     int idx = -1;
     for (int i = 0; i < URCU_MAX_THREADS; i++) {
@@ -162,21 +192,33 @@ int urcu_register_thread(urcu_t *rcu)
     if (idx != -1) {
         rcu->readers[idx].epoch = 1; /* Allocate slot */
         __atomic_store_n(&rcu->readers[idx].active, false, __ATOMIC_RELEASE);
-        urcu_thread_idx = idx;
+        registration->rcu = rcu;
+        registration->idx = idx;
+        registration->depth = 0;
     }
     pthread_mutex_unlock(&rcu->registry_mutex);
+    if (idx == -1 || pthread_setspecific(rcu->registration_key, registration) != 0) {
+        if (idx != -1) {
+            pthread_mutex_lock(&rcu->registry_mutex);
+            rcu->readers[idx].epoch = 0;
+            pthread_mutex_unlock(&rcu->registry_mutex);
+        }
+        free(registration);
+        return -1;
+    }
     return idx;
 }
 
 void urcu_unregister_thread(urcu_t *rcu)
 {
-    int idx = urcu_thread_idx;
-    if (idx >= 0) {
+    urcu_registration_t *registration = pthread_getspecific(rcu->registration_key);
+    if (registration) {
         pthread_mutex_lock(&rcu->registry_mutex);
-        __atomic_store_n(&rcu->readers[idx].active, false, __ATOMIC_RELEASE);
-        rcu->readers[idx].epoch = 0; /* Free slot */
-        urcu_thread_idx = -1;
+        __atomic_store_n(&rcu->readers[registration->idx].active, false, __ATOMIC_RELEASE);
+        rcu->readers[registration->idx].epoch = 0; /* Free slot */
         pthread_mutex_unlock(&rcu->registry_mutex);
+        pthread_setspecific(rcu->registration_key, NULL);
+        free(registration);
     }
 }
 

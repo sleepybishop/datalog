@@ -45,6 +45,30 @@ START_TEST(test_facts_spec_sort)
 }
 END_TEST
 
+START_TEST(test_lftj_more_than_32_subgoals)
+{
+    const size_t subgoal_count = 33;
+    s_facts *facts = new_facts(NULL, 100);
+    ck_assert(facts != NULL);
+    ck_assert(facts_add_spo(facts, "alice", "friend", "bob") != NULL);
+
+    p_spec spec = calloc(subgoal_count * 4 + 2, sizeof(*spec));
+    ck_assert(spec != NULL);
+    for (size_t i = 0; i < subgoal_count; i++) {
+        spec[i * 4] = "?s";
+        spec[i * 4 + 1] = "friend";
+        spec[i * 4 + 2] = "?o";
+    }
+    s_binding *bindings = spec_bindings(spec);
+    ck_assert(bindings != NULL);
+    ck_assert_int_eq(1, facts_lftj_solve(facts, spec, bindings));
+
+    free(bindings);
+    free(spec);
+    delete_facts(facts);
+}
+END_TEST
+
 START_TEST(test_lftj_iterator_basic)
 {
     s_facts *facts = new_facts(NULL, 100);
@@ -139,6 +163,7 @@ START_TEST(test_hexastore_compaction)
     facts_add_spo(facts, "s2", "p1", "o4");
 
     hexastore_compact(facts->hexastore);
+    ck_assert(facts_get_spo(facts, "s2", "p1", "o4") != NULL);
 
     s_lftj_iterator *it = new_lftj_iterator(facts->hexastore->trie_spo, 0, 1, 2);
     ck_assert(it != NULL);
@@ -169,6 +194,7 @@ Suite *triejoin_suite(void)
     tcase_add_test(tc_core, test_facts_spec_sort);
     tcase_add_test(tc_core, test_lftj_iterator_basic);
     tcase_add_test(tc_core, test_lftj_solve);
+    tcase_add_test(tc_core, test_lftj_more_than_32_subgoals);
     tcase_add_test(tc_core, test_hexastore_compaction);
     suite_add_tcase(s, tc_core);
     return s;

@@ -189,13 +189,8 @@ long intern_get_long(s_intern *intern, const char *string)
     assert(intern);
     assert(string);
     i = intern_find_symbol(intern, string);
-    if (i) {
-        if (!i->long_p) {
-            i->long_value = strtol(string, NULL, 10);
-            i->long_p = 1;
-        }
-        return i->long_value;
-    }
+    if (i)
+        return strtol(string, NULL, 10);
     return 0;
 }
 
@@ -205,12 +200,7 @@ double intern_get_double(s_intern *intern, const char *string)
     assert(intern);
     assert(string);
     i = intern_find_symbol(intern, string);
-    if (i) {
-        if (!i->double_p) {
-            i->double_value = strtod(string, NULL);
-            i->double_p = 1;
-        }
-        return i->double_value;
-    }
+    if (i)
+        return strtod(string, NULL);
     return 0.0;
 }

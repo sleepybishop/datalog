@@ -4,9 +4,7 @@
 #include "rax.h"
 #include "fact.h"
 #include "intern.h"
-#include "arena.h"
 #include <stdlib.h>
-#include <string.h>
 #include <stdint.h>
 
 static inline uint64_t get_symbol_id(Symbol ptr)
@@ -39,12 +37,21 @@ static inline void encode_triple_key(unsigned char *key, Symbol c1, Symbol c2, S
 
 s_hexastore *new_hexastore(void)
 {
-    s_hexastore *h = malloc(sizeof(s_hexastore));
-    if (h) {
-        h->arena = NULL;
-        h->trie_spo = raxNew();
-        h->trie_pos = raxNew();
-        h->trie_osp = raxNew();
+    s_hexastore *h = calloc(1, sizeof(*h));
+    if (!h)
+        return NULL;
+    h->trie_spo = raxNew();
+    h->trie_pos = raxNew();
+    h->trie_osp = raxNew();
+    if (!h->trie_spo || !h->trie_pos || !h->trie_osp) {
+        if (h->trie_spo)
+            raxFree(h->trie_spo);
+        if (h->trie_pos)
+            raxFree(h->trie_pos);
+        if (h->trie_osp)
+            raxFree(h->trie_osp);
+        free(h);
+        return NULL;
     }
     return h;
 }
@@ -93,98 +100,62 @@ void hexastore_remove(s_hexastore *h, s_fact *f)
     raxRemove(h->trie_osp, key, 24, NULL);
 }
 
-#define raxPadding(nodesize) ((sizeof(void *) - (((nodesize) + 4) % sizeof(void *))) & (sizeof(void *) - 1))
-
-static inline size_t rax_node_current_length(raxNode *n)
+static int insert_into_indexes(rax *spo, rax *pos, rax *osp, s_fact *f)
 {
-    return sizeof(raxNode) + n->size + raxPadding(n->size) + (n->iscompr ? sizeof(raxNode *) : sizeof(raxNode *) * n->size) +
-           ((n->iskey && !n->isnull) ? sizeof(void *) : 0);
+    unsigned char key[24];
+    encode_triple_key(key, f->s, f->p, f->o);
+    if (raxInsert(spo, key, sizeof(key), f, NULL) != 1)
+        return 0;
+    encode_triple_key(key, f->p, f->o, f->s);
+    if (raxInsert(pos, key, sizeof(key), f, NULL) != 1)
+        return 0;
+    encode_triple_key(key, f->o, f->s, f->p);
+    return raxInsert(osp, key, sizeof(key), f, NULL) == 1;
 }
 
-static inline raxNode **rax_node_last_child_ptr(raxNode *n)
+static void replace_rax_contents(rax *destination, rax *replacement)
 {
-    return (raxNode **)((char *)n + rax_node_current_length(n) - sizeof(raxNode *) -
-                        ((n->iskey && !n->isnull) ? sizeof(void *) : 0));
-}
-
-static raxNode *rax_node_compact(s_rax_arena *new_arena, raxNode *n)
-{
-    if (!n)
-        return NULL;
-
-    size_t len = rax_node_current_length(n);
-    size_t total_size = len + sizeof(size_t);
-    void *mem = rax_arena_alloc(new_arena, total_size);
-    if (!mem)
-        return NULL;
-    *(size_t *)mem = total_size;
-    raxNode *new_node = (raxNode *)((char *)mem + sizeof(size_t));
-
-    memcpy(new_node, n, len);
-
-    int num_children = new_node->iscompr ? 1 : new_node->size;
-    raxNode **new_last_child = rax_node_last_child_ptr(new_node);
-    raxNode **old_last_child = rax_node_last_child_ptr(n);
-
-    for (int i = 0; i < num_children; i++) {
-        raxNode **new_child_slot = new_last_child - i;
-        raxNode **old_child_slot = old_last_child - i;
-        raxNode *old_child;
-        memcpy(&old_child, old_child_slot, sizeof(old_child));
-
-        if (old_child) {
-            raxNode *new_child = rax_node_compact(new_arena, old_child);
-            memcpy(new_child_slot, &new_child, sizeof(new_child));
-        }
-    }
-
-    return new_node;
-}
-
-static rax *rax_compact(s_rax_arena *new_arena, rax *rt)
-{
-    if (!rt)
-        return NULL;
-
-    raxNode *new_head = rax_node_compact(new_arena, rt->head);
-    if (!new_head)
-        return NULL;
-
-    size_t size = sizeof(rax);
-    size_t total_size = size + sizeof(size_t);
-    void *mem = rax_arena_alloc(new_arena, total_size);
-    if (!mem)
-        return NULL;
-    *(size_t *)mem = total_size;
-    rax *new_rt = (rax *)((char *)mem + sizeof(size_t));
-
-    memcpy(new_rt, rt, sizeof(rax));
-    new_rt->head = new_head;
-
-    return new_rt;
+    rax old = *destination;
+    *destination = *replacement;
+    *replacement = old;
+    raxFree(replacement);
 }
 
 void hexastore_compact(s_hexastore *h)
 {
-    if (!h || !h->arena)
+    if (!h)
         return;
 
-    s_rax_arena *new_arena = rax_arena_create(h->arena->chunk_size);
-    if (!new_arena)
+    rax *new_spo = raxNew();
+    rax *new_pos = raxNew();
+    rax *new_osp = raxNew();
+    if (!new_spo || !new_pos || !new_osp) {
+        if (new_spo)
+            raxFree(new_spo);
+        if (new_pos)
+            raxFree(new_pos);
+        if (new_osp)
+            raxFree(new_osp);
         return;
-
-    rax *new_spo = rax_compact(new_arena, h->trie_spo);
-    rax *new_pos = rax_compact(new_arena, h->trie_pos);
-    rax *new_osp = rax_compact(new_arena, h->trie_osp);
-
-    if (new_spo && new_pos && new_osp) {
-        h->trie_spo = new_spo;
-        h->trie_pos = new_pos;
-        h->trie_osp = new_osp;
-
-        rax_arena_destroy(h->arena);
-        h->arena = new_arena;
-    } else {
-        rax_arena_destroy(new_arena);
     }
+
+    int success = 1;
+    raxIterator it;
+    raxStart(&it, h->trie_spo);
+    raxSeek(&it, "^", NULL, 0);
+    while (success && raxNext(&it))
+        success = insert_into_indexes(new_spo, new_pos, new_osp, it.data);
+    raxStop(&it);
+
+    if (!success) {
+        raxFree(new_spo);
+        raxFree(new_pos);
+        raxFree(new_osp);
+        return;
+    }
+
+    /* Keep the public rax object addresses stable because s_facts caches them. */
+    replace_rax_contents(h->trie_spo, new_spo);
+    replace_rax_contents(h->trie_pos, new_pos);
+    replace_rax_contents(h->trie_osp, new_osp);
 }

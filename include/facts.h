@@ -35,6 +35,13 @@ typedef struct facts {
     int disable_listener;
 } s_facts;
 
+typedef enum { FACT_ORIGIN_ASSERTED, FACT_ORIGIN_DERIVED } e_fact_origin;
+
+typedef struct fact_support {
+    size_t asserted;
+    size_t derived;
+} s_fact_support;
+
 void facts_init(s_facts *facts, s_intern *symbols, unsigned long max);
 
 void facts_destroy(s_facts *facts);
@@ -67,13 +74,24 @@ void facts_unintern(s_facts *facts, Symbol sym);
 
 s_fact *facts_add_fact(s_facts *facts, s_fact *f);
 
+s_fact *facts_add_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin);
+
 s_fact *facts_add_spo(s_facts *facts, const char *s, const char *p, const char *o);
+
+s_fact *facts_add_spo_origin(s_facts *facts, const char *s, const char *p, const char *o, e_fact_origin origin);
 
 int facts_add(s_facts *facts, p_spec spec);
 
 int facts_remove_fact(s_facts *facts, s_fact *f);
 
+int facts_remove_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin);
+
 int facts_remove_spo(s_facts *facts, const char *s, const char *p, const char *o);
+
+int facts_remove_spo_origin(s_facts *facts, const char *s, const char *p, const char *o, e_fact_origin origin);
+
+/* Returns 1 when the fact exists, 0 when it does not, and -1 for invalid arguments. */
+int facts_get_support_spo(s_facts *facts, const char *s, const char *p, const char *o, s_fact_support *support);
 
 int facts_remove(s_facts *facts, p_spec spec);
 
@@ -85,8 +103,10 @@ unsigned long facts_count(s_facts *facts);
 
 typedef struct facts_cursor {
     raxIterator it;
+    s_facts *facts;
     unsigned char end_key[24];
     int started;
+    int locked;
     int index_type;
     const char **var_s;
     const char **var_p;
@@ -150,6 +170,12 @@ double facts_get_prop_double(s_facts *facts, const char *s, const char *p);
 s_fact *facts_set_prop(s_facts *facts, const char *s, const char *p, const char *o);
 
 void facts_register_tx_listener(s_facts *facts, f_facts_tx_listener listener, void *user_data);
+
+/* Called after a changed outer transaction is committed and its write lock is released. */
+void facts_register_commit_observer(s_facts *facts, f_facts_commit_observer observer, void *user_data);
+
+/* Internal transaction rollback hook. */
+void facts_apply_rollback_entry(s_facts *facts, const s_rollback_entry *entry);
 
 typedef struct entity {
     s_facts *facts;

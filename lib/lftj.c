@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -291,10 +292,14 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
     const char *var_name = vars[var_idx];
     const char **bound_slot = bindings_get(bindings, var_name);
 
-    s_lftj_iterator *active_iters[32];
+    s_lftj_iterator **active_iters = malloc((size_t)subgoal_count * sizeof(*active_iters));
     int active_count = 0;
-    int opened_levels[32];
-    memset(opened_levels, 0, sizeof(opened_levels));
+    int *opened_levels = calloc((size_t)subgoal_count, sizeof(*opened_levels));
+    if (!active_iters || !opened_levels) {
+        free(active_iters);
+        free(opened_levels);
+        return 0;
+    }
 
     for (int i = 0; i < subgoal_count; i++) {
         s_lftj_subgoal *sub = &subgoals[i];
@@ -343,6 +348,8 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
                 opened_levels[k]--;
             }
         }
+        free(active_iters);
+        free(opened_levels);
         return 0;
     }
 
@@ -372,17 +379,32 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
         }
     }
     *bound_slot = NULL;
+    free(active_iters);
+    free(opened_levels);
     return found_solutions;
 }
 
 /* Entrypoint for Leapfrog Triejoin query evaluation */
 int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
 {
-    int subgoal_count = spec_count_facts(spec);
-    if (subgoal_count == 0)
+    size_t subgoal_count_sz = spec_count_facts(spec);
+    if (subgoal_count_sz == 0)
         return 0;
+    if (subgoal_count_sz > INT_MAX || subgoal_count_sz > SIZE_MAX / (3 * sizeof(const char *)))
+        return -1;
+    int subgoal_count = (int)subgoal_count_sz;
+    int acquired = transaction_acquire_reader(&facts->tx);
+    int solutions = -1;
+    int initialized_iterators = 0;
 
-    s_lftj_subgoal subgoals[32];
+    s_lftj_subgoal *subgoals = calloc(subgoal_count_sz, sizeof(*subgoals));
+    const char **vars = calloc(subgoal_count_sz * 3, sizeof(*vars));
+    s_lftj_iterator *iterators_storage = calloc(subgoal_count_sz, sizeof(*iterators_storage));
+    s_lftj_iterator **iterators = calloc(subgoal_count_sz, sizeof(*iterators));
+    int(*iterator_cols)[3] = calloc(subgoal_count_sz, sizeof(*iterator_cols));
+    if (!subgoals || !vars || !iterators_storage || !iterators || !iterator_cols)
+        goto cleanup;
+
     for (int i = 0; i < subgoal_count; i++) {
         s_spec_fact *f = (s_spec_fact *)(spec + i * 4);
 
@@ -398,11 +420,11 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
         /* If a constant is not found in the database symbols, the query has 0 solutions! */
         if ((!subgoals[i].s_var && !subgoals[i].s_sym) || (!subgoals[i].p_var && !subgoals[i].p_sym) ||
             (!subgoals[i].o_var && !subgoals[i].o_sym)) {
-            return 0;
+            solutions = 0;
+            goto cleanup;
         }
     }
 
-    const char *vars[128];
     int vars_count = 0;
     for (int i = 0; i < subgoal_count; i++) {
         s_lftj_subgoal *sub = &subgoals[i];
@@ -446,10 +468,6 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
         {1, 2, 0}, /* trie_pos */
         {2, 0, 1}  /* trie_osp */
     };
-
-    s_lftj_iterator iterators_storage[32];
-    s_lftj_iterator *iterators[32];
-    int iterator_cols[32][3];
 
     for (int i = 0; i < subgoal_count; i++) {
         s_lftj_subgoal *sub = &subgoals[i];
@@ -504,16 +522,22 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
         const int *cols = trie_candidate_cols[best_cand];
         iterators[i] = &iterators_storage[i];
         init_lftj_iterator(iterators[i], t, cols[0], cols[1], cols[2]);
+        initialized_iterators++;
         memcpy(iterator_cols[i], cols, 3 * sizeof(int));
     }
 
-    int solutions =
-        lftj_solve_rec(facts, subgoals, bindings, 0, vars, vars_count, iterators, subgoal_count, iterator_cols, NULL, NULL);
+    solutions = lftj_solve_rec(facts, subgoals, bindings, 0, vars, vars_count, iterators, subgoal_count, iterator_cols, NULL, NULL);
 
-    for (int i = 0; i < subgoal_count; i++) {
+cleanup:
+    for (int i = 0; i < initialized_iterators; i++) {
         raxStop(&iterators_storage[i].it);
     }
-
+    free(iterator_cols);
+    free(iterators);
+    free(iterators_storage);
+    free(vars);
+    free(subgoals);
+    transaction_release_reader(&facts->tx, acquired);
     return solutions;
 }
 
@@ -542,44 +566,56 @@ static int naive_solve_rec(s_facts *main_facts, s_facts **dbs, s_spec_fact *subg
             : sub->o;
 
     s_facts_cursor fc;
-    const char *cs = (s_val && s_val[0] != '?') ? s_val : NULL;
-    const char *cp = (p_val && p_val[0] != '?') ? p_val : NULL;
-    const char *co = (o_val && o_val[0] != '?') ? o_val : NULL;
-    facts_cursor_init(db, &fc, db->index_spo, NULL, NULL); // We can't filter O here without index, but it's okay for naive.
+    const char *cursor_s = NULL, *cursor_p = NULL, *cursor_o = NULL;
+    const char **var_s = s_val && s_val[0] == '?' ? &cursor_s : NULL;
+    const char **var_p = p_val && p_val[0] == '?' ? &cursor_p : NULL;
+    const char **var_o = o_val && o_val[0] == '?' ? &cursor_o : NULL;
+    if (var_s || var_p || var_o)
+        facts_with_1_2(db, &fc, s_val, p_val, o_val, var_s, var_p, var_o);
+    else
+        facts_with_3(db, &fc, s_val, p_val, o_val);
     s_fact *f;
     while ((f = facts_cursor_next(&fc))) {
         const char *fs = symbol_to_str(f->s);
         const char *fp = symbol_to_str(f->p);
         const char *fo = symbol_to_str(f->o);
-        if (cs && strcmp(cs, fs) != 0)
-            continue;
-        if (cp && strcmp(cp, fp) != 0)
-            continue;
-        if (co && strcmp(co, fo) != 0)
-            continue;
 
-        const char *old_s = NULL, *old_p = NULL, *old_o = NULL;
-        if (sub->s && sub->s[0] == '?') {
-            old_s = *bindings_get(bindings, sub->s);
-            *bindings_get(bindings, sub->s) = fs;
-        }
-        if (sub->p && sub->p[0] == '?') {
-            old_p = *bindings_get(bindings, sub->p);
-            *bindings_get(bindings, sub->p) = fp;
-        }
-        if (sub->o && sub->o[0] == '?') {
-            old_o = *bindings_get(bindings, sub->o);
-            *bindings_get(bindings, sub->o) = fo;
+        const char *terms[3] = {sub->s, sub->p, sub->o};
+        const char *values[3] = {fs, fp, fo};
+        const char **changed_slots[3];
+        const char *old_values[3];
+        int changed_count = 0;
+        int compatible = 1;
+        for (int i = 0; i < 3; i++) {
+            if (!terms[i] || terms[i][0] != '?')
+                continue;
+            const char **slot = bindings_get(bindings, terms[i]);
+            if (!slot || (*slot && strcmp(*slot, values[i]) != 0)) {
+                compatible = 0;
+                break;
+            }
+            if (!*slot) {
+                int already_changed = 0;
+                for (int j = 0; j < changed_count; j++) {
+                    if (changed_slots[j] == slot) {
+                        already_changed = 1;
+                        break;
+                    }
+                }
+                if (!already_changed) {
+                    changed_slots[changed_count] = slot;
+                    old_values[changed_count] = *slot;
+                    changed_count++;
+                }
+                *slot = values[i];
+            }
         }
 
-        solutions += naive_solve_rec(main_facts, dbs, subgoals, subgoal_count, current_subgoal + 1, bindings, cb, user_data);
+        if (compatible)
+            solutions += naive_solve_rec(main_facts, dbs, subgoals, subgoal_count, current_subgoal + 1, bindings, cb, user_data);
 
-        if (sub->s && sub->s[0] == '?')
-            *bindings_get(bindings, sub->s) = old_s;
-        if (sub->p && sub->p[0] == '?')
-            *bindings_get(bindings, sub->p) = old_p;
-        if (sub->o && sub->o[0] == '?')
-            *bindings_get(bindings, sub->o) = old_o;
+        for (int i = 0; i < changed_count; i++)
+            *changed_slots[i] = old_values[i];
     }
     facts_cursor_stop(&fc);
     return solutions;

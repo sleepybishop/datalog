@@ -182,6 +182,8 @@ s_binding *spec_bindings(p_spec spec)
     bindings_size = (count + 1) * sizeof(s_binding);
     vars_size = count * sizeof(char *);
     bindings = calloc(bindings_size + vars_size, 1);
+    if (!bindings)
+        return NULL;
     vars = (const char **)(((char *)bindings) + bindings_size);
     b = bindings;
     v = vars;

@@ -16,6 +16,10 @@ typedef struct fact {
     Symbol p;
     Symbol o;
     Symbol negated;
+    /* Support classes are idempotent: a fact may be asserted, derived, or both. */
+    unsigned char asserted_count;
+    unsigned char derived_count;
+    /* Compatibility total. This is always asserted_count + derived_count. */
     size_t proof_count;
 } s_fact;
 

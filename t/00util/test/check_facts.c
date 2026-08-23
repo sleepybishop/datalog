@@ -1,5 +1,7 @@
 #include <check.h>
+#include <pthread.h>
 #include <stdlib.h>
+#include <string.h>
 #include "facts.h"
 #include "io.h"
 #include "sparql.h"
@@ -24,6 +26,32 @@ START_TEST(test_facts_init_destroy)
     facts_init(&f, NULL, 100);
     ck_assert(!facts_count(&f));
     facts_destroy(&f);
+}
+END_TEST
+
+static void *foreign_commit(void *arg)
+{
+    int *result = malloc(sizeof(*result));
+    if (result)
+        *result = facts_transaction_commit(arg);
+    return result;
+}
+
+START_TEST(test_transaction_rejects_foreign_commit)
+{
+    ck_assert_int_eq(0, facts_transaction_begin(g_f));
+    ck_assert(facts_add_spo(g_f, "owned", "by", "main") != NULL);
+
+    pthread_t thread;
+    ck_assert_int_eq(0, pthread_create(&thread, NULL, foreign_commit, g_f));
+    int *result = NULL;
+    ck_assert_int_eq(0, pthread_join(thread, (void **)&result));
+    ck_assert(result != NULL);
+    ck_assert_int_eq(-1, *result);
+    free(result);
+
+    ck_assert_int_eq(0, facts_transaction_rollback(g_f));
+    ck_assert(facts_get_spo(g_f, "owned", "by", "main") == NULL);
 }
 END_TEST
 
@@ -1924,6 +1952,68 @@ static void my_tx_listener(s_facts *facts, const s_rollback_entry *entries, size
     g_listener_entry_count = entry_count;
 }
 
+START_TEST(test_facts_support_origin_and_rollback)
+{
+    s_fact_support support;
+    ck_assert(facts_add_spo(g_f, "supported", "by", "both"));
+    ck_assert_int_eq(facts_get_support_spo(g_f, "supported", "by", "both", &support), 1);
+    ck_assert(support.asserted == 1);
+    ck_assert(support.derived == 0);
+
+    ck_assert_int_eq(facts_transaction_begin(g_f), 0);
+    ck_assert(facts_add_spo_origin(g_f, "supported", "by", "both", FACT_ORIGIN_DERIVED));
+    ck_assert_int_eq(facts_transaction_rollback(g_f), 0);
+    ck_assert_int_eq(facts_get_support_spo(g_f, "supported", "by", "both", &support), 1);
+    ck_assert(support.asserted == 1);
+    ck_assert(support.derived == 0);
+
+    ck_assert_int_eq(facts_transaction_begin(g_f), 0);
+    ck_assert(facts_add_spo_origin(g_f, "supported", "by", "both", FACT_ORIGIN_DERIVED));
+    ck_assert_int_eq(facts_transaction_commit(g_f), 0);
+    ck_assert_int_eq(facts_get_support_spo(g_f, "supported", "by", "both", &support), 1);
+    ck_assert(support.asserted == 1);
+    ck_assert(support.derived == 1);
+
+    ck_assert_int_eq(facts_transaction_begin(g_f), 0);
+    ck_assert(facts_remove_spo(g_f, "supported", "by", "both"));
+    ck_assert_int_eq(facts_transaction_rollback(g_f), 0);
+    ck_assert_int_eq(facts_get_support_spo(g_f, "supported", "by", "both", &support), 1);
+    ck_assert(support.asserted == 1);
+    ck_assert(support.derived == 1);
+
+    ck_assert(facts_remove_spo(g_f, "supported", "by", "both"));
+    ck_assert(facts_get_spo(g_f, "supported", "by", "both"));
+    ck_assert_int_eq(facts_get_support_spo(g_f, "supported", "by", "both", &support), 1);
+    ck_assert(support.asserted == 0);
+    ck_assert(support.derived == 1);
+    ck_assert(facts_remove_spo_origin(g_f, "supported", "by", "both", FACT_ORIGIN_DERIVED));
+    ck_assert(!facts_get_spo(g_f, "supported", "by", "both"));
+}
+END_TEST
+
+START_TEST(test_facts_log_tracks_asserted_support_only)
+{
+    FILE *log = tmpfile();
+    ck_assert(log != NULL);
+    g_f->log = log;
+    ck_assert_int_eq(facts_transaction_begin(g_f), 0);
+    ck_assert(facts_add_spo(g_f, "logged", "support", "fact"));
+    ck_assert(facts_add_spo_origin(g_f, "logged", "support", "fact", FACT_ORIGIN_DERIVED));
+    ck_assert_int_eq(facts_transaction_rollback(g_f), 0);
+    ck_assert_int_eq(fflush(log), 0);
+    rewind(log);
+    char line[1024];
+    int operations = 0;
+    while (fgets(line, sizeof(line), log)) {
+        if (strcmp(line, "add\n") == 0 || strcmp(line, "remove\n") == 0)
+            operations++;
+    }
+    ck_assert_int_eq(operations, 2); /* asserted add plus its rollback compensation */
+    g_f->log = NULL;
+    fclose(log);
+}
+END_TEST
+
 START_TEST(test_facts_tx_listener_and_entity_builder)
 {
     // Test Transaction Listener:
@@ -2083,6 +2173,9 @@ Suite *facts_suite(void)
     tcase_add_test(tc_prop, test_facts_helpers);
     tcase_add_test(tc_prop, test_facts_properties);
     tcase_add_test(tc_prop, test_facts_transaction);
+    tcase_add_test(tc_prop, test_transaction_rejects_foreign_commit);
+    tcase_add_test(tc_prop, test_facts_support_origin_and_rollback);
+    tcase_add_test(tc_prop, test_facts_log_tracks_asserted_support_only);
     tcase_add_test(tc_prop, test_facts_tx_listener_and_entity_builder);
     suite_add_tcase(s, tc_prop);
     return s;

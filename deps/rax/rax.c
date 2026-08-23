@@ -206,6 +206,8 @@ raxNode *raxNewNode(rax *rax, size_t children, int datafield)
 /* Deallocate node */
 void raxFreeNode(rax *rax, raxNode *n)
 {
+    if (!n)
+        return;
     size_t usable = 0;
     if (rax->alloc_size) {
         usable = malloc_usable_size(n);
@@ -845,14 +847,18 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
             nodesize = sizeof(raxNode) + trimmedlen + raxPadding(trimmedlen) + sizeof(raxNode *);
             if (h->iskey && !h->isnull)
                 nodesize += sizeof(void *);
+            usable = 0;
             trimmed = rax_malloc_usable(nodesize, &usable);
-            *alloc_size += usable;
+            if (trimmed)
+                *alloc_size += usable;
         }
 
         if (postfixlen) {
             nodesize = sizeof(raxNode) + postfixlen + raxPadding(postfixlen) + sizeof(raxNode *);
+            usable = 0;
             postfix = rax_malloc_usable(nodesize, &usable);
-            *alloc_size += usable;
+            if (postfix)
+                *alloc_size += usable;
         }
 
         /* OOM? Abort now that the tree is untouched. */
@@ -925,14 +931,18 @@ int raxInsertAt(rax *rax, unsigned char *s, size_t len, void *data, void **old, 
         size_t nodesize = sizeof(raxNode) + postfixlen + raxPadding(postfixlen) + sizeof(raxNode *);
         if (data != NULL)
             nodesize += sizeof(void *);
+        usable = 0;
         raxNode *postfix = rax_malloc_usable(nodesize, &usable);
-        *alloc_size += usable;
+        if (postfix)
+            *alloc_size += usable;
 
         nodesize = sizeof(raxNode) + j + raxPadding(j) + sizeof(raxNode *);
         if (h->iskey && !h->isnull)
             nodesize += sizeof(void *);
+        usable = 0;
         raxNode *trimmed = rax_malloc_usable(nodesize, &usable);
-        *alloc_size += usable;
+        if (trimmed)
+            *alloc_size += usable;
 
         if (postfix == NULL || trimmed == NULL) {
             raxFreeNode(rax, postfix);
