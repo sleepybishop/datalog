@@ -10,7 +10,8 @@
 #include "lftj.h"
 #include "eval.h"
 
-void facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact);
+int facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact);
+static s_fact *facts_lookup_spo_locked(s_facts *facts, const char *s, const char *p, const char *o);
 
 static inline uint64_t get_symbol_id(Symbol ptr)
 {
@@ -64,6 +65,7 @@ void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
     facts->log = NULL;
 
     facts->prog = NULL;
+    facts->owns_prog = 0;
     facts->disable_listener = 0;
 
     transaction_init(&facts->tx);
@@ -72,6 +74,10 @@ void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
 
 void facts_destroy(s_facts *facts)
 {
+    if (facts->owns_prog)
+        delete_datalog_program(facts->prog);
+    facts->prog = NULL;
+    facts->owns_prog = 0;
     delete_hexastore(facts->hexastore);
     set_destroy(&facts->index);
     if (facts->symbols_delete)
@@ -85,6 +91,8 @@ void facts_reset(s_facts *facts)
     unsigned long max;
     f_facts_commit_observer commit_observer;
     void *commit_observer_data;
+    f_facts_commit_summary_observer commit_summary_observer;
+    void *commit_summary_observer_data;
     s_set_cursor sc;
     s_set_item *si;
     assert(facts);
@@ -116,10 +124,13 @@ void facts_reset(s_facts *facts)
     // 5. Reset transaction data/state
     commit_observer = facts->tx.commit_observer;
     commit_observer_data = facts->tx.commit_observer_data;
+    commit_summary_observer = facts->tx.commit_summary_observer;
+    commit_summary_observer_data = facts->tx.commit_summary_observer_data;
     transaction_destroy(&facts->tx);
     transaction_init(&facts->tx);
     facts_register_tx_listener(facts, rete_tx_listener, NULL);
     facts_register_commit_observer(facts, commit_observer, commit_observer_data);
+    facts_register_commit_summary_observer(facts, commit_summary_observer, commit_summary_observer_data);
 }
 
 s_facts *new_facts(s_intern *symbols, unsigned long max)
@@ -142,6 +153,16 @@ s_set_item *facts_find_symbol(s_facts *facts, const char *string)
     s_set_item *item = intern_find_symbol(facts->symbols, string);
     transaction_release_reader(&facts->tx, acquired);
     return item;
+}
+
+int facts_contains_symbol(s_facts *facts, const char *string)
+{
+    if (!facts || !string)
+        return -1;
+    int acquired = transaction_acquire_reader(&facts->tx);
+    int found = intern_find_symbol(facts->symbols, string) != NULL;
+    transaction_release_reader(&facts->tx, acquired);
+    return found;
 }
 
 Symbol facts_find_symbol_str(s_facts *facts, const char *string)
@@ -233,7 +254,7 @@ const char *facts_anon(s_facts *facts, const char *name)
     while (1) {
         random_id(b, 10);
         b[10] = 0;
-        if (!facts_find_symbol(facts, buf))
+        if (!facts_contains_symbol(facts, buf))
             return symbol_to_str(facts_intern(facts, buf));
     }
     return NULL;
@@ -258,10 +279,15 @@ static s_fact *facts_insert_fact_copy(s_facts *facts, const s_fact *f, int recor
     facts_intern(facts, symbol_to_str(new->s));
     facts_intern(facts, symbol_to_str(new->p));
     facts_intern(facts, symbol_to_str(new->o));
+    if (record_rollback && facts_rollback_push(facts, ROLLBACK_REMOVE, new) != 0) {
+        facts_unintern(facts, new->s);
+        facts_unintern(facts, new->p);
+        facts_unintern(facts, new->o);
+        delete_fact(new);
+        return NULL;
+    }
     hexastore_insert(facts->hexastore, new);
     set_add(&facts->index, new, sizeof(Symbol) * 4);
-    if (record_rollback)
-        facts_rollback_push(facts, ROLLBACK_REMOVE, new);
     return new;
 }
 
@@ -276,7 +302,10 @@ s_fact *facts_add_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
         found = (s_fact *)si->data;
         unsigned char *support = origin == FACT_ORIGIN_ASSERTED ? &found->asserted_count : &found->derived_count;
         if (*support == 0) {
-            facts_rollback_push(facts, ROLLBACK_STATE, found);
+            if (facts_rollback_push(facts, ROLLBACK_STATE, found) != 0) {
+                transaction_release_writer(&facts->tx, has_lock);
+                return NULL;
+            }
             if (origin == FACT_ORIGIN_ASSERTED && facts->log)
                 write_fact_log("add", found, facts->log);
             *support = 1;
@@ -285,11 +314,11 @@ s_fact *facts_add_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
         transaction_release_writer(&facts->tx, has_lock);
         return found;
     }
-    if (origin == FACT_ORIGIN_ASSERTED && facts->log)
-        write_fact_log("add", f, facts->log);
     s_fact copy = *f;
     fact_set_origin(&copy, origin);
     s_fact *new = facts_insert_fact_copy(facts, &copy, 1);
+    if (new && origin == FACT_ORIGIN_ASSERTED && facts->log)
+        write_fact_log("add", new, facts->log);
     transaction_release_writer(&facts->tx, has_lock);
     return new;
 }
@@ -396,16 +425,15 @@ int facts_add(s_facts *facts, p_spec spec)
     return 0;
 }
 
-static void facts_remove_found(s_facts *facts, s_set_item *si, s_fact *found, int record_rollback)
+static int facts_remove_found(s_facts *facts, s_set_item *si, s_fact *found)
 {
     set_remove(&facts->index, si);
-    if (record_rollback)
-        facts_rollback_push(facts, ROLLBACK_ADD, found);
     hexastore_remove(facts->hexastore, found);
     facts_unintern(facts, found->s);
     facts_unintern(facts, found->p);
     facts_unintern(facts, found->o);
     delete_fact(found);
+    return 0;
 }
 
 int facts_remove_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
@@ -422,14 +450,18 @@ int facts_remove_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
             transaction_release_writer(&facts->tx, has_lock);
             return 0;
         }
+        e_rollback_action action = found->asserted_count + found->derived_count > 1 ? ROLLBACK_STATE : ROLLBACK_ADD;
+        if (facts_rollback_push(facts, action, found) != 0) {
+            transaction_release_writer(&facts->tx, has_lock);
+            return -1;
+        }
         if (origin == FACT_ORIGIN_ASSERTED && facts->log)
             write_fact_log("remove", found, facts->log);
-        if (found->asserted_count + found->derived_count > 1) {
-            facts_rollback_push(facts, ROLLBACK_STATE, found);
+        if (action == ROLLBACK_STATE) {
             *support = 0;
             found->proof_count = found->asserted_count + found->derived_count;
         } else {
-            facts_remove_found(facts, si, found, 1);
+            facts_remove_found(facts, si, found);
         }
         transaction_release_writer(&facts->tx, has_lock);
         return 1;
@@ -445,22 +477,13 @@ int facts_remove_fact(s_facts *facts, s_fact *f)
 
 int facts_remove_spo_origin(s_facts *facts, const char *s, const char *p, const char *o, e_fact_origin origin)
 {
-    s_fact f;
-    assert(facts);
-    assert(s);
-    assert(p);
-    assert(o);
-    Symbol s_sym = facts_find_symbol_str(facts, s);
-    Symbol p_sym = facts_find_symbol_str(facts, p);
-    Symbol o_sym = facts_find_symbol_str(facts, o);
-    if (!s_sym || !p_sym || !o_sym) {
-        return 0;
-    }
-    f.s = s_sym;
-    f.p = p_sym;
-    f.o = o_sym;
-    f.negated = NULL;
-    return facts_remove_fact_origin(facts, &f, origin);
+    if (!facts || !s || !p || !o)
+        return -1;
+    int has_lock = transaction_acquire_writer(&facts->tx);
+    s_fact *fact = facts_lookup_spo_locked(facts, s, p, o);
+    int result = fact ? facts_remove_fact_origin(facts, fact, origin) : 0;
+    transaction_release_writer(&facts->tx, has_lock);
+    return result;
 }
 
 int facts_remove_spo(s_facts *facts, const char *s, const char *p, const char *o)
@@ -491,6 +514,62 @@ int facts_get_support_spo(s_facts *facts, const char *s, const char *p, const ch
     }
     transaction_release_reader(&facts->tx, acquired);
     return found;
+}
+
+static s_fact *facts_lookup_spo_locked(s_facts *facts, const char *s, const char *p, const char *o)
+{
+    Symbol s_sym = intern_find_symbol_str(facts->symbols, s);
+    Symbol p_sym = intern_find_symbol_str(facts->symbols, p);
+    Symbol o_sym = intern_find_symbol_str(facts->symbols, o);
+    if (!s_sym || !p_sym || !o_sym)
+        return NULL;
+    s_fact key = {.s = s_sym, .p = p_sym, .o = o_sym, .negated = NULL};
+    s_set_item *si = set_get(&facts->index, &key, sizeof(Symbol) * 4);
+    return si ? (s_fact *)si->data : NULL;
+}
+
+int facts_contains_spo(s_facts *facts, const char *s, const char *p, const char *o)
+{
+    if (!facts || !s || !p || !o)
+        return -1;
+    int acquired = transaction_acquire_reader(&facts->tx);
+    int found = facts_lookup_spo_locked(facts, s, p, o) != NULL;
+    transaction_release_reader(&facts->tx, acquired);
+    return found;
+}
+
+void facts_snapshot_destroy(s_fact_snapshot *snapshot)
+{
+    if (!snapshot)
+        return;
+    free(snapshot->s);
+    free(snapshot->p);
+    free(snapshot->o);
+    memset(snapshot, 0, sizeof(*snapshot));
+}
+
+int facts_get_spo_snapshot(s_facts *facts, const char *s, const char *p, const char *o, s_fact_snapshot *snapshot)
+{
+    if (!facts || !s || !p || !o || !snapshot)
+        return -1;
+    memset(snapshot, 0, sizeof(*snapshot));
+    int acquired = transaction_acquire_reader(&facts->tx);
+    s_fact *fact = facts_lookup_spo_locked(facts, s, p, o);
+    if (!fact) {
+        transaction_release_reader(&facts->tx, acquired);
+        return 0;
+    }
+    snapshot->s = strdup(symbol_to_str(fact->s));
+    snapshot->p = strdup(symbol_to_str(fact->p));
+    snapshot->o = strdup(symbol_to_str(fact->o));
+    snapshot->support.asserted = fact->asserted_count;
+    snapshot->support.derived = fact->derived_count;
+    transaction_release_reader(&facts->tx, acquired);
+    if (!snapshot->s || !snapshot->p || !snapshot->o) {
+        facts_snapshot_destroy(snapshot);
+        return -1;
+    }
+    return 1;
 }
 
 int facts_remove(s_facts *facts, p_spec spec)
@@ -544,18 +623,12 @@ s_fact *facts_get_fact(s_facts *facts, s_fact *f)
 
 s_fact *facts_get_spo(s_facts *facts, const char *s, const char *p, const char *o)
 {
-    s_fact f;
-    Symbol s_sym = facts_find_symbol_str(facts, s);
-    Symbol p_sym = facts_find_symbol_str(facts, p);
-    Symbol o_sym = facts_find_symbol_str(facts, o);
-    if (!s_sym || !p_sym || !o_sym) {
+    if (!facts || !s || !p || !o)
         return NULL;
-    }
-    f.s = s_sym;
-    f.p = p_sym;
-    f.o = o_sym;
-    f.negated = NULL;
-    return facts_get_fact(facts, &f);
+    int acquired = transaction_acquire_reader(&facts->tx);
+    s_fact *result = facts_lookup_spo_locked(facts, s, p, o);
+    transaction_release_reader(&facts->tx, acquired);
+    return result;
 }
 
 unsigned long facts_count(s_facts *facts)
@@ -671,12 +744,14 @@ void facts_with_3(s_facts *facts, s_facts_cursor *c, const char *s, const char *
     assert(s);
     assert(p);
     assert(o);
-    Symbol interned_s = facts_find_symbol_str(facts, s);
-    Symbol interned_p = facts_find_symbol_str(facts, p);
-    Symbol interned_o = facts_find_symbol_str(facts, o);
+    int acquired = transaction_acquire_reader(&facts->tx);
+    Symbol interned_s = intern_find_symbol_str(facts->symbols, s);
+    Symbol interned_p = intern_find_symbol_str(facts->symbols, p);
+    Symbol interned_o = intern_find_symbol_str(facts->symbols, o);
     if (!interned_s || !interned_p || !interned_o) {
         facts_cursor_init(facts, c, facts->index_spo, NULL, NULL);
         facts_cursor_stop(c);
+        transaction_release_reader(&facts->tx, acquired);
         return;
     }
     f.s = interned_s;
@@ -684,16 +759,19 @@ void facts_with_3(s_facts *facts, s_facts_cursor *c, const char *s, const char *
     f.o = interned_o;
     f.negated = NULL;
     facts_cursor_init(facts, c, facts->index_spo, &f, &f);
+    transaction_release_reader(&facts->tx, acquired);
 }
 
 void facts_with_0(s_facts *facts, s_facts_cursor *c, const char **var_s, const char **var_p, const char **var_o)
 {
     assert(facts);
     assert(c);
+    int acquired = transaction_acquire_reader(&facts->tx);
     facts_cursor_init(facts, c, facts->index_spo, NULL, NULL);
     c->var_s = var_s;
     c->var_p = var_p;
     c->var_o = var_o;
+    transaction_release_reader(&facts->tx, acquired);
 }
 
 void facts_with_1_2(s_facts *facts, s_facts_cursor *c, const char *s, const char *p, const char *o, const char **var_s,
@@ -708,12 +786,14 @@ void facts_with_1_2(s_facts *facts, s_facts_cursor *c, const char *s, const char
     assert(p);
     assert(o);
     assert(var_s || var_p || var_o);
-    Symbol interned_s = var_s ? NULL : facts_find_symbol_str(facts, s);
-    Symbol interned_p = var_p ? NULL : facts_find_symbol_str(facts, p);
-    Symbol interned_o = var_o ? NULL : facts_find_symbol_str(facts, o);
+    int acquired = transaction_acquire_reader(&facts->tx);
+    Symbol interned_s = var_s ? NULL : intern_find_symbol_str(facts->symbols, s);
+    Symbol interned_p = var_p ? NULL : intern_find_symbol_str(facts->symbols, p);
+    Symbol interned_o = var_o ? NULL : intern_find_symbol_str(facts->symbols, o);
     if ((!var_s && !interned_s) || (!var_p && !interned_p) || (!var_o && !interned_o)) {
         facts_cursor_init(facts, c, facts->index_spo, NULL, NULL);
         facts_cursor_stop(c);
+        transaction_release_reader(&facts->tx, acquired);
         return;
     }
     start.s = var_s ? P_FIRST : interned_s;
@@ -727,6 +807,7 @@ void facts_with_1_2(s_facts *facts, s_facts_cursor *c, const char *s, const char
     c->var_s = var_s;
     c->var_p = var_p;
     c->var_o = var_o;
+    transaction_release_reader(&facts->tx, acquired);
 }
 
 void facts_with_spo(s_facts *facts, s_binding *bindings, s_facts_cursor *c, const char *s, const char *p, const char *o)
@@ -1125,16 +1206,42 @@ const char *facts_get_prop(s_facts *facts, const char *s, const char *p)
     return NULL;
 }
 
+int facts_get_prop_copy(s_facts *facts, const char *s, const char *p, char **value)
+{
+    if (!facts || !s || !p || !value)
+        return -1;
+    *value = NULL;
+    const char *o = NULL;
+    s_binding bindings[] = {{"?o", &o}, {NULL, NULL}};
+    s_facts_cursor c;
+    facts_with_spo(facts, bindings, &c, s, p, "?o");
+    int found = facts_cursor_next(&c) != NULL;
+    if (found)
+        *value = strdup(o);
+    facts_cursor_stop(&c);
+    return found && !*value ? -1 : found;
+}
+
 long facts_get_prop_long(s_facts *facts, const char *s, const char *p)
 {
-    const char *o = facts_get_prop(facts, s, p);
-    return o ? facts_get_long(facts, o) : 0;
+    const char *o = NULL;
+    s_binding bindings[] = {{"?o", &o}, {NULL, NULL}};
+    s_facts_cursor c;
+    facts_with_spo(facts, bindings, &c, s, p, "?o");
+    long value = facts_cursor_next(&c) ? strtol(o, NULL, 10) : 0;
+    facts_cursor_stop(&c);
+    return value;
 }
 
 double facts_get_prop_double(s_facts *facts, const char *s, const char *p)
 {
-    const char *o = facts_get_prop(facts, s, p);
-    return o ? facts_get_double(facts, o) : 0.0;
+    const char *o = NULL;
+    s_binding bindings[] = {{"?o", &o}, {NULL, NULL}};
+    s_facts_cursor c;
+    facts_with_spo(facts, bindings, &c, s, p, "?o");
+    double value = facts_cursor_next(&c) ? strtod(o, NULL) : 0.0;
+    facts_cursor_stop(&c);
+    return value;
 }
 
 s_fact *facts_set_prop(s_facts *facts, const char *s, const char *p, const char *o)
@@ -1146,9 +1253,9 @@ s_fact *facts_set_prop(s_facts *facts, const char *s, const char *p, const char 
     return ret;
 }
 
-void facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact)
+int facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact)
 {
-    transaction_rollback_push(facts, &facts->tx, action, fact);
+    return transaction_rollback_push(facts, &facts->tx, action, fact);
 }
 
 int facts_transaction_begin(s_facts *facts)
@@ -1164,6 +1271,31 @@ int facts_transaction_commit(s_facts *facts)
 int facts_transaction_rollback(s_facts *facts)
 {
     return transaction_rollback(facts, &facts->tx);
+}
+
+int facts_read_begin(s_facts *facts, s_facts_read_guard *guard)
+{
+    if (!guard)
+        return -1;
+    guard->facts = NULL;
+    guard->acquired = 0;
+    if (!facts)
+        return -1;
+    /* A read guard cannot outlive a write transaction owned by this thread. */
+    if (transaction_writer_owned(&facts->tx))
+        return -1;
+    guard->facts = facts;
+    guard->acquired = transaction_acquire_reader(&facts->tx);
+    return 0;
+}
+
+void facts_read_end(s_facts_read_guard *guard)
+{
+    if (!guard || !guard->facts)
+        return;
+    transaction_release_reader(&guard->facts->tx, guard->acquired);
+    guard->facts = NULL;
+    guard->acquired = 0;
 }
 
 void facts_register_tx_listener(s_facts *facts, f_facts_tx_listener listener, void *user_data)
@@ -1182,6 +1314,118 @@ void facts_register_commit_observer(s_facts *facts, f_facts_commit_observer obse
     pthread_mutex_unlock(&facts->tx.state_mutex);
 }
 
+unsigned int facts_commit_subject_partition(const char *subject)
+{
+    if (!subject || subject[0] == '?')
+        return 0;
+    uint32_t hash = 5381;
+    const unsigned char *p = (const unsigned char *)subject;
+    while (*p)
+        hash = ((hash << 5) + hash) + *p++;
+    return 1 + (hash % (FACTS_COMMIT_PARTITIONS - 1));
+}
+
+void facts_register_commit_summary_observer(s_facts *facts, f_facts_commit_summary_observer observer, void *user_data)
+{
+    assert(facts);
+    pthread_mutex_lock(&facts->tx.state_mutex);
+    facts->tx.commit_summary_observer = observer;
+    facts->tx.commit_summary_observer_data = user_data;
+    pthread_mutex_unlock(&facts->tx.state_mutex);
+}
+
+static int facts_remove_all_derived(s_facts *facts)
+{
+    size_t capacity = facts_count(facts);
+    s_fact *derived = capacity ? malloc(capacity * sizeof(*derived)) : NULL;
+    if (capacity && !derived)
+        return -1;
+
+    size_t count = 0;
+    s_facts_cursor cursor;
+    facts_with_0(facts, &cursor, NULL, NULL, NULL);
+    s_fact *fact;
+    while ((fact = facts_cursor_next(&cursor)) != NULL) {
+        if (fact->derived_count)
+            derived[count++] = *fact;
+    }
+    facts_cursor_stop(&cursor);
+
+    int result = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (facts_remove_fact_origin(facts, &derived[i], FACT_ORIGIN_DERIVED) < 0) {
+            result = -1;
+            break;
+        }
+    }
+    free(derived);
+    return result;
+}
+
+int facts_attach_program(s_facts *facts, const s_datalog_program *prog)
+{
+    if (!facts)
+        return -1;
+    if (transaction_writer_owned(&facts->tx))
+        return -1;
+
+    s_datalog_program *copy = NULL;
+    if (prog) {
+        copy = datalog_program_clone(prog);
+        if (!copy)
+            return -1;
+        if (copy->rule_count > 0) {
+            int num_strata = 0;
+            int *strata = datalog_program_stratify(copy, &num_strata);
+            if (!strata) {
+                delete_datalog_program(copy);
+                return -1;
+            }
+            free(strata);
+        }
+    }
+
+    if (facts_transaction_begin(facts) != 0) {
+        delete_datalog_program(copy);
+        return -1;
+    }
+
+    s_datalog_program *old_prog = facts->prog;
+    int old_owns_prog = facts->owns_prog;
+    int old_disable = facts->disable_listener;
+    facts->disable_listener = 1;
+    facts->prog = copy;
+    facts->owns_prog = copy != NULL;
+
+    int result = facts_remove_all_derived(facts);
+    if (result == 0 && copy)
+        result = facts_datalog_eval(facts, copy) < 0 ? -1 : 0;
+
+    facts->disable_listener = old_disable;
+    if (result != 0) {
+        facts->prog = old_prog;
+        facts->owns_prog = old_owns_prog;
+        facts_transaction_rollback(facts);
+        delete_datalog_program(copy);
+        return -1;
+    }
+
+    if (transaction_commit_silent(facts, &facts->tx) != 0) {
+        facts->prog = old_prog;
+        facts->owns_prog = old_owns_prog;
+        delete_datalog_program(copy);
+        return -1;
+    }
+    if (old_owns_prog)
+        delete_datalog_program(old_prog);
+    return 0;
+}
+
+int facts_detach_program(s_facts *facts)
+{
+    return facts_attach_program(facts, NULL);
+}
+
 void facts_apply_rollback_entry(s_facts *facts, const s_rollback_entry *entry)
 {
     assert(facts);
@@ -1192,7 +1436,7 @@ void facts_apply_rollback_entry(s_facts *facts, const s_rollback_entry *entry)
         if (si) {
             if (entry->fact.asserted_count && facts->log)
                 write_fact_log("remove", (s_fact *)si->data, facts->log);
-            facts_remove_found(facts, si, (s_fact *)si->data, 0);
+            facts_remove_found(facts, si, (s_fact *)si->data);
         }
     } else if (entry->action == ROLLBACK_ADD) {
         if (!si) {

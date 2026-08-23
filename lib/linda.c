@@ -14,15 +14,11 @@ struct linda_pattern {
     unsigned int cond_index;
 };
 
+_Static_assert(LINDA_COND_PARTITIONS == FACTS_COMMIT_PARTITIONS, "Linda and commit partitions must match");
+
 static unsigned int get_linda_cond_idx(const char *s)
 {
-    if (!s || s[0] == '?')
-        return 0;
-    unsigned int hash = 5381;
-    int c;
-    while ((c = *s++))
-        hash = ((hash << 5) + hash) + (unsigned int)c;
-    return 1 + (hash % (LINDA_COND_PARTITIONS - 1));
+    return facts_commit_subject_partition(s);
 }
 
 static int linda_pattern_init(s_linda_pattern *pattern, const char *s, const char *p, const char *o, int copy_terms)
@@ -78,11 +74,13 @@ void delete_linda_pattern(s_linda_pattern *pattern)
     free(pattern);
 }
 
-static void linda_commit_observer(s_facts *facts, void *user_data)
+static void linda_commit_observer(s_facts *facts, const s_facts_commit_summary *summary, void *user_data)
 {
     (void)facts;
     s_linda_space *space = (s_linda_space *)user_data;
     for (size_t i = 0; i < LINDA_COND_PARTITIONS; i++) {
+        if (!(summary->subject_partitions & (UINT64_C(1) << i)))
+            continue;
         pthread_mutex_lock(&space->locks[i]);
         pthread_cond_broadcast(&space->conds[i]);
         pthread_mutex_unlock(&space->locks[i]);
@@ -166,7 +164,7 @@ s_linda_space *new_linda_space(unsigned long max_symbols)
         }
     }
     pthread_condattr_destroy(&cond_attr);
-    facts_register_commit_observer(space->db, linda_commit_observer, space);
+    facts_register_commit_summary_observer(space->db, linda_commit_observer, space);
     return space;
 }
 
@@ -179,7 +177,7 @@ void delete_linda_space(s_linda_space *space)
     while (space->active_workers > 0)
         pthread_cond_wait(&space->worker_cond, &space->worker_lock);
     pthread_mutex_unlock(&space->worker_lock);
-    facts_register_commit_observer(space->db, NULL, NULL);
+    facts_register_commit_summary_observer(space->db, NULL, NULL);
     for (size_t i = 0; i < LINDA_COND_PARTITIONS; i++) {
         pthread_cond_destroy(&space->conds[i]);
         pthread_mutex_destroy(&space->locks[i]);

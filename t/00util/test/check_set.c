@@ -94,12 +94,12 @@ START_TEST(test_set_new_delete)
 }
 END_TEST
 
-void setup_add()
+void setup_add(void)
 {
     set_init(&g_set, 32);
 }
 
-void teardown_add()
+void teardown_add(void)
 {
     set_destroy(&g_set);
 }
@@ -202,7 +202,7 @@ START_TEST(test_set_add_ten)
 }
 END_TEST
 
-void setup_remove()
+void setup_remove(void)
 {
     set_init(&g_set, 8);
     set_add(&g_set, "a", 1);
@@ -217,7 +217,7 @@ void setup_remove()
     set_add(&g_set, "j", 1);
 }
 
-void teardown_remove()
+void teardown_remove(void)
 {
     set_destroy(&g_set);
 }
@@ -351,12 +351,12 @@ START_TEST(test_set_remove_not_in_set)
 }
 END_TEST
 
-void setup_resize()
+void setup_resize(void)
 {
     set_init(&g_set, 4);
 }
 
-void teardown_resize()
+void teardown_resize(void)
 {
     set_destroy(&g_set);
 }
@@ -526,12 +526,12 @@ START_TEST(test_set_resize_two)
 }
 END_TEST
 
-void setup_cursor()
+void setup_cursor(void)
 {
     set_init(&g_set, 6);
 }
 
-void teardown_cursor()
+void teardown_cursor(void)
 {
     set_destroy(&g_set);
 }

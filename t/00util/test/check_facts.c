@@ -55,6 +55,113 @@ START_TEST(test_transaction_rejects_foreign_commit)
 }
 END_TEST
 
+typedef struct guarded_writer_data {
+    s_facts *facts;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int started;
+    int result;
+} s_guarded_writer_data;
+
+static void *guarded_writer(void *arg)
+{
+    s_guarded_writer_data *data = arg;
+    pthread_mutex_lock(&data->mutex);
+    data->started = 1;
+    pthread_cond_signal(&data->cond);
+    pthread_mutex_unlock(&data->mutex);
+    data->result = facts_remove_spo(data->facts, "guarded", "value", "alive");
+    return NULL;
+}
+
+START_TEST(test_safe_read_apis)
+{
+    ck_assert(facts_add_spo(g_f, "guarded", "value", "alive"));
+    ck_assert_int_eq(facts_contains_symbol(g_f, "guarded"), 1);
+    ck_assert_int_eq(facts_contains_spo(g_f, "guarded", "value", "alive"), 1);
+
+    s_fact_snapshot snapshot;
+    ck_assert_int_eq(facts_get_spo_snapshot(g_f, "guarded", "value", "alive", &snapshot), 1);
+    ck_assert_str_eq(snapshot.s, "guarded");
+    ck_assert_str_eq(snapshot.p, "value");
+    ck_assert_str_eq(snapshot.o, "alive");
+    ck_assert_int_eq(snapshot.support.asserted, 1);
+
+    s_facts_read_guard outer = {0};
+    s_facts_read_guard inner = {0};
+    ck_assert_int_eq(facts_read_begin(g_f, &outer), 0);
+    ck_assert_int_eq(facts_read_begin(g_f, &inner), 0);
+    s_fact *borrowed = facts_get_spo(g_f, "guarded", "value", "alive");
+    ck_assert(borrowed);
+
+    s_guarded_writer_data data = {.facts = g_f, .started = 0, .result = -1};
+    pthread_mutex_init(&data.mutex, NULL);
+    pthread_cond_init(&data.cond, NULL);
+    pthread_t writer;
+    ck_assert_int_eq(pthread_create(&writer, NULL, guarded_writer, &data), 0);
+    pthread_mutex_lock(&data.mutex);
+    while (!data.started)
+        pthread_cond_wait(&data.cond, &data.mutex);
+    pthread_mutex_unlock(&data.mutex);
+
+    ck_assert_str_eq(symbol_to_str(borrowed->s), "guarded");
+    ck_assert_int_eq(facts_contains_spo(g_f, "guarded", "value", "alive"), 1);
+    facts_read_end(&inner);
+    facts_read_end(&outer);
+
+    ck_assert_int_eq(pthread_join(writer, NULL), 0);
+    ck_assert_int_eq(data.result, 1);
+    pthread_cond_destroy(&data.cond);
+    pthread_mutex_destroy(&data.mutex);
+    ck_assert_int_eq(facts_contains_spo(g_f, "guarded", "value", "alive"), 0);
+
+    /* Owning snapshots remain valid after the underlying tuple is removed. */
+    ck_assert_str_eq(snapshot.s, "guarded");
+    ck_assert_str_eq(snapshot.o, "alive");
+    facts_snapshot_destroy(&snapshot);
+
+    ck_assert(facts_add_spo(g_f, "entity", "name", "copy me"));
+    char *value = NULL;
+    ck_assert_int_eq(facts_get_prop_copy(g_f, "entity", "name", &value), 1);
+    ck_assert(facts_remove_spo(g_f, "entity", "name", "copy me"));
+    ck_assert_str_eq(value, "copy me");
+    free(value);
+}
+END_TEST
+
+static int summary_calls;
+static s_facts_commit_summary last_summary;
+
+static void commit_summary_observer(s_facts *facts, const s_facts_commit_summary *summary, void *user_data)
+{
+    (void)facts;
+    (void)user_data;
+    summary_calls++;
+    last_summary = *summary;
+}
+
+START_TEST(test_commit_summary_partitions)
+{
+    const char *subjects[] = {"partition-alpha", "partition-beta"};
+    uint64_t expected = UINT64_C(1);
+    for (size_t i = 0; i < 2; i++)
+        expected |= UINT64_C(1) << facts_commit_subject_partition(subjects[i]);
+
+    summary_calls = 0;
+    memset(&last_summary, 0, sizeof(last_summary));
+    facts_register_commit_summary_observer(g_f, commit_summary_observer, NULL);
+    ck_assert_int_eq(facts_transaction_begin(g_f), 0);
+    ck_assert(facts_add_spo(g_f, subjects[0], "p", "o"));
+    ck_assert(facts_add_spo(g_f, subjects[1], "p", "o"));
+    ck_assert_int_eq(facts_transaction_commit(g_f), 0);
+
+    ck_assert_int_eq(summary_calls, 1);
+    ck_assert_int_eq(last_summary.physical_changes, 2);
+    ck_assert(last_summary.subject_partitions == expected);
+    facts_register_commit_summary_observer(g_f, NULL, NULL);
+}
+END_TEST
+
 START_TEST(test_facts_reset)
 {
     s_facts *f = new_facts(NULL, 100);
@@ -88,12 +195,12 @@ START_TEST(test_facts_new_delete)
 }
 END_TEST
 
-void setup_add_fact()
+void setup_add_fact(void)
 {
     g_f = new_facts(NULL, 100);
 }
 
-void teardown_add_fact()
+void teardown_add_fact(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -183,12 +290,12 @@ START_TEST(test_facts_add_fact_ten)
 }
 END_TEST
 
-void setup_add_spo()
+void setup_add_spo(void)
 {
     g_f = new_facts(NULL, 100);
 }
 
-void teardown_add_spo()
+void teardown_add_spo(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -253,12 +360,12 @@ START_TEST(test_facts_add_spo_ten)
 }
 END_TEST
 
-void setup_add()
+void setup_add(void)
 {
     g_f = new_facts(NULL, 10);
 }
 
-void teardown_add()
+void teardown_add(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -319,7 +426,7 @@ START_TEST(test_facts_add_anon)
 }
 END_TEST
 
-void setup_remove_fact()
+void setup_remove_fact(void)
 {
     g_f = new_facts(NULL, 100);
     facts_add_spo(g_f, "a", "b", "c");
@@ -334,7 +441,7 @@ void setup_remove_fact()
     facts_add_spo(g_f, "j", "k", "l");
 }
 
-void teardown_remove_fact()
+void teardown_remove_fact(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -463,7 +570,7 @@ START_TEST(test_facts_remove_fact_ten)
 }
 END_TEST
 
-void setup_remove_spo()
+void setup_remove_spo(void)
 {
     g_f = new_facts(NULL, 100);
     facts_add_spo(g_f, "a", "b", "c");
@@ -478,7 +585,7 @@ void setup_remove_spo()
     facts_add_spo(g_f, "j", "k", "l");
 }
 
-void teardown_remove_spo()
+void teardown_remove_spo(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -534,7 +641,7 @@ START_TEST(test_facts_remove_spo_ten)
 }
 END_TEST
 
-void setup_remove()
+void setup_remove(void)
 {
     g_f = new_facts(NULL, 10);
     facts_add_spo(g_f, "a", "b", "c");
@@ -549,7 +656,7 @@ void setup_remove()
     facts_add_spo(g_f, "j", "k", "l");
 }
 
-void teardown_remove()
+void teardown_remove(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -651,7 +758,7 @@ START_TEST(test_facts_remove_ten)
 }
 END_TEST
 
-void setup_with_spo()
+void setup_with_spo(void)
 {
     g_f = new_facts(NULL, 100);
     facts_add_spo(g_f, "a", "b", "c");
@@ -661,7 +768,7 @@ void setup_with_spo()
     facts_add_spo(g_f, "h", "i", "c");
 }
 
-void teardown_with_spo()
+void teardown_with_spo(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -1000,12 +1107,12 @@ START_TEST(test_facts_with_spo_os)
 }
 END_TEST
 
-void setup_write()
+void setup_write(void)
 {
     g_f = new_facts(NULL, 10);
 }
 
-void teardown_write()
+void teardown_write(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -1082,12 +1189,12 @@ START_TEST(test_write_facts_escapes)
 }
 END_TEST
 
-void setup_read()
+void setup_read(void)
 {
     g_f = new_facts(NULL, 10);
 }
 
-void teardown_read()
+void teardown_read(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -1168,12 +1275,12 @@ START_TEST(test_read_facts_escapes)
 }
 END_TEST
 
-void setup_write_facts_log()
+void setup_write_facts_log(void)
 {
     g_f = new_facts(NULL, 10);
 }
 
-void teardown_write_facts_log()
+void teardown_write_facts_log(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -1303,12 +1410,12 @@ START_TEST(test_write_facts_log_escapes)
 }
 END_TEST
 
-void setup_read_facts_log()
+void setup_read_facts_log(void)
 {
     g_f = new_facts(NULL, 10);
 }
 
-void teardown_read_facts_log()
+void teardown_read_facts_log(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -1383,12 +1490,12 @@ START_TEST(test_read_facts_log_malformed)
 }
 END_TEST
 
-void setup_anon()
+void setup_anon(void)
 {
     g_f = new_facts(NULL, 10);
 }
 
-void teardown_anon()
+void teardown_anon(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -1415,7 +1522,7 @@ START_TEST(test_facts_anon)
 }
 END_TEST
 
-void setup_with()
+void setup_with(void)
 {
     g_f = new_facts(NULL, 10);
     facts_add_spo(g_f, "a", "b", "c");
@@ -1425,7 +1532,7 @@ void setup_with()
     facts_add_spo(g_f, "h", "i", "c");
 }
 
-void teardown_with()
+void teardown_with(void)
 {
     delete_facts(g_f);
     g_f = NULL;
@@ -2174,6 +2281,8 @@ Suite *facts_suite(void)
     tcase_add_test(tc_prop, test_facts_properties);
     tcase_add_test(tc_prop, test_facts_transaction);
     tcase_add_test(tc_prop, test_transaction_rejects_foreign_commit);
+    tcase_add_test(tc_prop, test_safe_read_apis);
+    tcase_add_test(tc_prop, test_commit_summary_partitions);
     tcase_add_test(tc_prop, test_facts_support_origin_and_rollback);
     tcase_add_test(tc_prop, test_facts_log_tracks_asserted_support_only);
     tcase_add_test(tc_prop, test_facts_tx_listener_and_entity_builder);
