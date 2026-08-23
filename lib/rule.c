@@ -112,6 +112,23 @@ s_datalog_rule *datalog_program_add_rule(s_datalog_program *prog, const s_spec_f
     return rule;
 }
 
+s_datalog_program *datalog_program_clone(const s_datalog_program *prog)
+{
+    if (!prog)
+        return NULL;
+    s_datalog_program *copy = new_datalog_program();
+    if (!copy)
+        return NULL;
+    for (size_t i = 0; i < prog->rule_count; i++) {
+        const s_datalog_rule *rule = &prog->rules[i];
+        if (!datalog_program_add_rule(copy, &rule->head, rule->body, rule->body_count)) {
+            delete_datalog_program(copy);
+            return NULL;
+        }
+    }
+    return copy;
+}
+
 static int is_variable(const char *str)
 {
     return str && str[0] == '?';

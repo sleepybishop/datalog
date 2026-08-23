@@ -292,6 +292,68 @@ START_TEST(test_eval_negation_rebuild_preserves_other_rule)
 }
 END_TEST
 
+static int eval_observer_calls;
+static unsigned long eval_observer_count;
+
+static void eval_observer(s_facts *facts, void *user_data)
+{
+    (void)user_data;
+    eval_observer_calls++;
+    eval_observer_count = facts_count(facts);
+}
+
+START_TEST(test_eval_is_one_observable_transaction)
+{
+    s_facts *db = new_facts(NULL, 1000);
+    s_datalog_program *prog = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(prog, "?X <path> ?Y :- ?X <edge> ?Y .\n"
+                                                       "?X <path> ?Y :- ?X <edge> ?Z, ?Z <path> ?Y .\n"),
+                     0);
+    ck_assert(facts_add_spo(db, "a", "edge", "b"));
+    ck_assert(facts_add_spo(db, "b", "edge", "c"));
+    eval_observer_calls = 0;
+    eval_observer_count = 0;
+    facts_register_commit_observer(db, eval_observer, NULL);
+
+    ck_assert_int_eq(facts_datalog_eval(db, prog), 3);
+    ck_assert_int_eq(eval_observer_calls, 1);
+    ck_assert_int_eq(eval_observer_count, 5);
+
+    delete_datalog_program(prog);
+    delete_facts(db);
+}
+END_TEST
+
+START_TEST(test_program_attachment_owns_copy_and_recomputes)
+{
+    s_facts *db = new_facts(NULL, 1000);
+    s_datalog_program *first = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(first, "?X <result> yes :- ?X <source> yes .\n"), 0);
+    ck_assert(facts_add_spo(db, "item", "source", "yes"));
+    ck_assert_int_eq(facts_attach_program(db, first), 0);
+    delete_datalog_program(first);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "result", "yes"), 1);
+
+    /* The attached deep copy remains reactive after the caller frees its input. */
+    ck_assert_int_eq(facts_transaction_begin(db), 0);
+    ck_assert(facts_add_spo(db, "other", "source", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(db), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "other", "result", "yes"), 1);
+
+    s_datalog_program *second = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(second, "?X <replacement> yes :- ?X <source> yes .\n"), 0);
+    ck_assert_int_eq(facts_attach_program(db, second), 0);
+    delete_datalog_program(second);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "result", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "replacement", "yes"), 1);
+
+    ck_assert_int_eq(facts_detach_program(db), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "replacement", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "source", "yes"), 1);
+    delete_facts(db);
+}
+END_TEST
+
 Suite *eval_suite(void)
 {
     Suite *s;
@@ -308,6 +370,8 @@ Suite *eval_suite(void)
     tcase_add_test(tc_core, test_eval_preserves_independent_asserted_and_derived_support);
     tcase_add_test(tc_core, test_eval_retraction_preserves_alternate_derivation);
     tcase_add_test(tc_core, test_eval_negation_rebuild_preserves_other_rule);
+    tcase_add_test(tc_core, test_eval_is_one_observable_transaction);
+    tcase_add_test(tc_core, test_program_attachment_owns_copy_and_recomputes);
 
     suite_add_tcase(s, tc_core);
     return s;

@@ -40,7 +40,7 @@ static void eval_solution_cb(s_binding *bindings, void *user_data)
             if (!s_val || !p_val || !o_val) {
                 return;
             }
-            if (facts_get_spo(data->main_facts, s_val, p_val, o_val)) {
+            if (facts_contains_spo(data->main_facts, s_val, p_val, o_val) > 0) {
                 return;
             }
         }
@@ -71,7 +71,7 @@ static void eval_solution_cb(s_binding *bindings, void *user_data)
     if (data->is_deletion) {
         /* During deletion, we WANT to find facts that exist in the main database so we can delete them.
            But we still don't want to insert duplicates into target_db. */
-        if (facts_get_spo(data->target_db, s_val, p_val, o_val)) {
+        if (facts_contains_spo(data->target_db, s_val, p_val, o_val) > 0) {
             return;
         }
     } else {
@@ -81,10 +81,10 @@ static void eval_solution_cb(s_binding *bindings, void *user_data)
         if (in_main > 0 && support.derived) {
             return;
         }
-        if (facts_get_spo(data->old_db, s_val, p_val, o_val)) {
+        if (facts_contains_spo(data->old_db, s_val, p_val, o_val) > 0) {
             return;
         }
-        if (facts_get_spo(data->target_db, s_val, p_val, o_val)) {
+        if (facts_contains_spo(data->target_db, s_val, p_val, o_val) > 0) {
             return;
         }
     }
@@ -173,19 +173,19 @@ static p_spec compile_rule_body_with_trigger(const s_datalog_rule *rule, int tri
     return (p_spec)spec;
 }
 
-int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
+static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *prog)
 {
     assert(facts);
     assert(prog);
+
+    if (prog->rule_count == 0)
+        return 0;
 
     int num_strata = 0;
     int *rule_strata = datalog_program_stratify(prog, &num_strata);
     if (!rule_strata) {
         return -1;
     }
-
-    int old_disable = facts->disable_listener;
-    facts->disable_listener = 1;
 
     size_t total_derived = 0;
 
@@ -379,8 +379,34 @@ int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
     }
 
     free(rule_strata);
-    facts->disable_listener = old_disable;
     return (int)total_derived;
+}
+
+int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog)
+{
+    if (!facts || !prog)
+        return -1;
+
+    int started_transaction = !transaction_writer_owned(&facts->tx);
+    if (started_transaction && facts_transaction_begin(facts) != 0)
+        return -1;
+
+    int old_disable = facts->disable_listener;
+    facts->disable_listener = 1;
+    int result = facts_datalog_eval_locked(facts, prog);
+
+    if (started_transaction) {
+        facts->disable_listener = old_disable;
+        if (result < 0) {
+            if (facts_transaction_rollback(facts) != 0)
+                result = -1;
+        } else if (transaction_commit_silent(facts, &facts->tx) != 0) {
+            result = -1;
+        }
+    } else {
+        facts->disable_listener = old_disable;
+    }
+    return result;
 }
 
 int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog, const s_rollback_entry *delta, size_t delta_count)

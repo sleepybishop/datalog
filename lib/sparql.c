@@ -868,7 +868,7 @@ int facts_sparql_insert(s_facts *facts, const char *query)
 
     int added_count = 0;
     for (size_t i = 0; i < triple_count; i++) {
-        if (!facts_get_spo(facts, triples[i].s, triples[i].p, triples[i].o)) {
+        if (facts_contains_spo(facts, triples[i].s, triples[i].p, triples[i].o) <= 0) {
             if (!facts_add_spo(facts, triples[i].s, triples[i].p, triples[i].o)) {
                 facts_transaction_rollback(facts);
                 goto error;

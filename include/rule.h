@@ -31,6 +31,9 @@ typedef struct datalog_program {
  */
 s_datalog_program *new_datalog_program(void);
 
+/* Return a deep copy, or NULL on allocation failure. */
+s_datalog_program *datalog_program_clone(const s_datalog_program *prog);
+
 /*
  * Free all memory associated with a Datalog program.
  */
