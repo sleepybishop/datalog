@@ -17,6 +17,8 @@
 #include "transaction.h"
 #include "hexastore.h"
 
+typedef struct justification_graph s_justification_graph;
+
 typedef struct facts {
     s_intern *symbols;
     size_t symbols_delete;
@@ -34,6 +36,8 @@ typedef struct facts {
     s_datalog_program *prog;
     int owns_prog;
     int disable_listener;
+    s_justification_graph *justifications;
+    s_justification_graph *justifications_staging;
 } s_facts;
 
 typedef enum { FACT_ORIGIN_ASSERTED, FACT_ORIGIN_DERIVED } e_fact_origin;
@@ -218,6 +222,9 @@ void facts_register_commit_summary_observer(s_facts *facts, f_facts_commit_summa
  */
 int facts_attach_program(s_facts *facts, const s_datalog_program *prog);
 int facts_detach_program(s_facts *facts);
+
+/* Number of distinct grounded rule applications supporting a derived fact. */
+size_t facts_justification_count(s_facts *facts, const char *s, const char *p, const char *o);
 
 /* Internal transaction rollback hook. */
 void facts_apply_rollback_entry(s_facts *facts, const s_rollback_entry *entry);

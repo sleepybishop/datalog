@@ -10,6 +10,7 @@
 #include "lftj.h"
 #include "eval.h"
 #include "facts_internal.h"
+#include "justification.h"
 
 int facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact);
 static s_fact *facts_lookup_spo_locked(s_facts *facts, const char *s, const char *p, const char *o);
@@ -68,6 +69,8 @@ void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
     facts->prog = NULL;
     facts->owns_prog = 0;
     facts->disable_listener = 0;
+    facts->justifications = new_justification_graph();
+    facts->justifications_staging = NULL;
 
     transaction_init(&facts->tx);
 }
@@ -78,6 +81,10 @@ void facts_destroy(s_facts *facts)
         delete_datalog_program(facts->prog);
     facts->prog = NULL;
     facts->owns_prog = 0;
+    delete_justification_graph(facts->justifications_staging);
+    delete_justification_graph(facts->justifications);
+    facts->justifications_staging = NULL;
+    facts->justifications = NULL;
     if (!facts->symbols_delete) {
         s_set_cursor cursor;
         set_cursor_init(&facts->index, &cursor);
@@ -113,6 +120,11 @@ void facts_reset(s_facts *facts)
     s_set_cursor sc;
     s_set_item *si;
     assert(facts);
+
+    delete_justification_graph(facts->justifications_staging);
+    delete_justification_graph(facts->justifications);
+    facts->justifications_staging = NULL;
+    facts->justifications = new_justification_graph();
 
     // 1. Recycle all facts back into the fact arena pool
     set_cursor_init(&facts->index, &sc);
@@ -173,6 +185,8 @@ s_facts *new_facts(s_intern *symbols, unsigned long max)
 
 void delete_facts(s_facts *facts)
 {
+    if (!facts)
+        return;
     facts_destroy(facts);
     free(facts);
 }
@@ -1385,6 +1399,42 @@ void facts_register_internal_commit_summary_observer(s_facts *facts, f_facts_com
     pthread_mutex_unlock(&facts->tx.state_mutex);
 }
 
+int facts_justifications_stage(s_facts *facts, int preserve_existing)
+{
+    if (!facts || facts->justifications_staging)
+        return -1;
+    facts->justifications_staging = preserve_existing ? justification_graph_clone(facts->justifications)
+                                                      : new_justification_graph();
+    return facts->justifications_staging ? 0 : -1;
+}
+
+void facts_justifications_commit(s_facts *facts)
+{
+    if (!facts || !facts->justifications_staging)
+        return;
+    delete_justification_graph(facts->justifications);
+    facts->justifications = facts->justifications_staging;
+    facts->justifications_staging = NULL;
+}
+
+void facts_justifications_discard(s_facts *facts)
+{
+    if (!facts)
+        return;
+    delete_justification_graph(facts->justifications_staging);
+    facts->justifications_staging = NULL;
+}
+
+size_t facts_justification_count(s_facts *facts, const char *s, const char *p, const char *o)
+{
+    if (!facts || !s || !p || !o)
+        return 0;
+    int acquired = transaction_acquire_reader(&facts->tx);
+    size_t count = justification_graph_count(facts->justifications, s, p, o);
+    transaction_release_reader(&facts->tx, acquired);
+    return count;
+}
+
 static int facts_remove_all_derived(s_facts *facts)
 {
     size_t capacity = facts_count(facts);
@@ -1451,7 +1501,9 @@ int facts_attach_program(s_facts *facts, const s_datalog_program *prog)
     facts->owns_prog = copy != NULL;
     facts_register_internal_tx_listener(facts, copy ? rete_tx_listener : NULL, NULL);
 
-    int result = facts_remove_all_derived(facts);
+    int result = facts_justifications_stage(facts, 0);
+    if (result == 0)
+        result = facts_remove_all_derived(facts);
     if (result == 0 && copy)
         result = facts_datalog_eval(facts, copy) < 0 ? -1 : 0;
 
@@ -1460,6 +1512,7 @@ int facts_attach_program(s_facts *facts, const s_datalog_program *prog)
         facts->prog = old_prog;
         facts->owns_prog = old_owns_prog;
         facts_register_internal_tx_listener(facts, old_internal_listener, old_internal_listener_data);
+        facts_justifications_discard(facts);
         facts_transaction_rollback(facts);
         delete_datalog_program(copy);
         return -1;
@@ -1469,11 +1522,13 @@ int facts_attach_program(s_facts *facts, const s_datalog_program *prog)
         facts->prog = old_prog;
         facts->owns_prog = old_owns_prog;
         facts_register_internal_tx_listener(facts, old_internal_listener, old_internal_listener_data);
+        facts_justifications_discard(facts);
         delete_datalog_program(copy);
         return -1;
     }
     if (old_owns_prog)
         delete_datalog_program(old_prog);
+    facts_justifications_commit(facts);
     return 0;
 }
 

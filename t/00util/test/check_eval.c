@@ -388,6 +388,63 @@ START_TEST(test_listener_failure_rolls_back_reactive_closure)
 }
 END_TEST
 
+START_TEST(test_justification_graph_tracks_alternative_grounded_proofs)
+{
+    s_facts *db = new_facts(NULL, 1000);
+    s_datalog_program *program = new_datalog_program();
+    ck_assert(db != NULL);
+    ck_assert(program != NULL);
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?X <result> yes :- ?X <source_a> yes .\n"
+                                                          "?X <result> yes :- ?X <source_b> yes .\n"),
+                     0);
+    ck_assert(facts_add_spo(db, "item", "source_a", "yes"));
+    ck_assert(facts_add_spo(db, "item", "source_b", "yes"));
+    ck_assert_int_eq(facts_attach_program(db, program), 0);
+    delete_datalog_program(program);
+
+    ck_assert_int_eq(facts_contains_spo(db, "item", "result", "yes"), 1);
+    ck_assert_int_eq(facts_justification_count(db, "item", "result", "yes"), 2);
+
+    ck_assert_int_eq(facts_transaction_begin(db), 0);
+    ck_assert_int_eq(facts_remove_spo(db, "item", "source_a", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(db), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "result", "yes"), 1);
+    ck_assert_int_eq(facts_justification_count(db, "item", "result", "yes"), 1);
+
+    ck_assert_int_eq(facts_transaction_begin(db), 0);
+    ck_assert_int_eq(facts_remove_spo(db, "item", "source_b", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(db), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "result", "yes"), 0);
+    ck_assert_int_eq(facts_justification_count(db, "item", "result", "yes"), 0);
+
+    delete_facts(db);
+}
+END_TEST
+
+START_TEST(test_justification_graph_tracks_recursive_chain)
+{
+    s_facts *db = new_facts(NULL, 1000);
+    s_datalog_program *program = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?X <path> ?Y :- ?X <edge> ?Y .\n"
+                                                          "?X <path> ?Z :- ?X <edge> ?Y, ?Y <path> ?Z .\n"),
+                     0);
+    ck_assert(facts_add_spo(db, "a", "edge", "b"));
+    ck_assert(facts_add_spo(db, "b", "edge", "c"));
+    ck_assert_int_eq(facts_attach_program(db, program), 0);
+    delete_datalog_program(program);
+
+    ck_assert_int_eq(facts_contains_spo(db, "a", "path", "c"), 1);
+    ck_assert(facts_justification_count(db, "a", "path", "c") >= 1);
+    ck_assert_int_eq(facts_transaction_begin(db), 0);
+    ck_assert_int_eq(facts_remove_spo(db, "b", "edge", "c"), 1);
+    ck_assert_int_eq(facts_transaction_commit(db), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "a", "path", "c"), 0);
+    ck_assert_int_eq(facts_justification_count(db, "a", "path", "c"), 0);
+
+    delete_facts(db);
+}
+END_TEST
+
 Suite *eval_suite(void)
 {
     Suite *s;
@@ -407,6 +464,8 @@ Suite *eval_suite(void)
     tcase_add_test(tc_core, test_eval_is_one_observable_transaction);
     tcase_add_test(tc_core, test_program_attachment_owns_copy_and_recomputes);
     tcase_add_test(tc_core, test_listener_failure_rolls_back_reactive_closure);
+    tcase_add_test(tc_core, test_justification_graph_tracks_alternative_grounded_proofs);
+    tcase_add_test(tc_core, test_justification_graph_tracks_recursive_chain);
 
     suite_add_tcase(s, tc_core);
     return s;

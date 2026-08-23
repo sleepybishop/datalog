@@ -15,6 +15,7 @@ lib/facts.o\
 lib/spec.o\
 lib/rule.o\
 lib/eval.o\
+lib/justification.o\
 lib/magic.o\
 lib/urcu.o\
 lib/linda.o

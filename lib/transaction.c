@@ -4,6 +4,7 @@
 #include <string.h>
 #include "transaction.h"
 #include "facts.h"
+#include "facts_internal.h"
 
 void transaction_init(s_transaction *tx)
 {
@@ -113,6 +114,7 @@ static int transaction_commit_impl(s_facts *facts, s_transaction *tx, int suppre
                 return -1;
             }
         }
+        facts_justifications_commit(facts);
         for (size_t i = 0; i < tx->rollback.size; i++) {
             if (tx->rollback.entries[i].action != ROLLBACK_STATE) {
                 unsigned int partition = facts_commit_subject_partition(symbol_to_str(tx->rollback.entries[i].fact.s));
@@ -171,6 +173,7 @@ int transaction_rollback(s_facts *facts, s_transaction *tx)
         return -1;
     }
     pthread_mutex_unlock(&tx->state_mutex);
+    facts_justifications_discard(facts);
     while (tx->rollback.size > 0) {
         s_rollback_entry entry = tx->rollback.entries[--tx->rollback.size];
         facts_apply_rollback_entry(facts, &entry);
