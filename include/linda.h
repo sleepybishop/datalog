@@ -10,6 +10,7 @@
 #define LINDA_COND_PARTITIONS 64
 #define LINDA_OK 0
 #define LINDA_TIMEOUT 1
+#define LINDA_CLOSED 2
 #define LINDA_ERROR -1
 
 typedef struct linda_pattern s_linda_pattern;
@@ -18,7 +19,15 @@ typedef struct linda_space s_linda_space;
 /* Allocate and initialize a new Linda Tuplespace */
 s_linda_space *new_linda_space(unsigned long max_symbols);
 
-/* Free the Linda Tuplespace and its internal database */
+/*
+ * Stop accepting new work and wake blocked rd/in calls. Closing is idempotent;
+ * awakened and subsequent operations return LINDA_CLOSED. The space remains
+ * valid until delete_linda_space() is called.
+ */
+int linda_space_close(s_linda_space *space);
+int linda_space_is_closed(s_linda_space *space);
+
+/* Close, wait for in-flight operations/workers, then free the tuplespace. */
 void delete_linda_space(s_linda_space *space);
 
 /*
