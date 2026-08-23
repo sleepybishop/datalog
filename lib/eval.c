@@ -19,6 +19,34 @@ typedef struct eval_cb_data {
     int *evaluation_error;
 } s_eval_cb_data;
 
+/*
+ * Scratch databases are private to one evaluation, but queries over several
+ * databases otherwise acquire their locks in data-dependent order. Hold each
+ * scratch writer lock for its whole lifetime so nested operations are no-ops.
+ * Transaction level stays zero, deliberately avoiding rollback-log references.
+ */
+static s_facts *new_eval_scratch(s_intern *symbols, unsigned long max)
+{
+    s_facts *facts = new_facts(symbols, max);
+    if (!facts)
+        return NULL;
+    int already_owned = transaction_acquire_writer(&facts->tx);
+    assert(!already_owned);
+    (void)already_owned;
+    return facts;
+}
+
+static void delete_eval_scratch(s_facts *facts)
+{
+    if (!facts)
+        return;
+    assert(transaction_writer_owned(&facts->tx));
+    assert(facts->tx.level == 0);
+    assert(facts->tx.rollback.size == 0);
+    transaction_release_writer(&facts->tx, 0);
+    delete_facts(facts);
+}
+
 static const char *resolve_term(const char *term, s_binding *bindings)
 {
     if (!term)
@@ -296,15 +324,15 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
         }
 
         /* 2. Create query-local databases for stratum evaluation */
-        s_facts *old_db = new_facts(facts->symbols, 256);
-        s_facts *delta_db = new_facts(facts->symbols, 256);
-        s_facts *new_db = new_facts(facts->symbols, 256);
-        s_facts *old_plus_delta_db = new_facts(facts->symbols, 256);
+        s_facts *old_db = new_eval_scratch(facts->symbols, 256);
+        s_facts *delta_db = new_eval_scratch(facts->symbols, 256);
+        s_facts *new_db = new_eval_scratch(facts->symbols, 256);
+        s_facts *old_plus_delta_db = new_eval_scratch(facts->symbols, 256);
         if (!old_db || !delta_db || !new_db || !old_plus_delta_db) {
-            delete_facts(old_db);
-            delete_facts(delta_db);
-            delete_facts(new_db);
-            delete_facts(old_plus_delta_db);
+            delete_eval_scratch(old_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
+            delete_eval_scratch(old_plus_delta_db);
             free(idb_preds);
             free(rule_strata);
             return -1;
@@ -358,20 +386,20 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
         }
 
         if (evaluation_error) {
-            delete_facts(old_db);
-            delete_facts(delta_db);
-            delete_facts(new_db);
-            delete_facts(old_plus_delta_db);
+            delete_eval_scratch(old_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
+            delete_eval_scratch(old_plus_delta_db);
             free(idb_preds);
             break;
         }
 
         size_t delta_size = facts_count(delta_db);
         if (delta_size == 0) {
-            delete_facts(old_db);
-            delete_facts(delta_db);
-            delete_facts(new_db);
-            delete_facts(old_plus_delta_db);
+            delete_eval_scratch(old_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
+            delete_eval_scratch(old_plus_delta_db);
             free(idb_preds);
             continue;
         }
@@ -385,7 +413,7 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
 
         /* 4. Semi-Naive Fixed-point loop */
         while (1) {
-            if (facts_reset_checked(new_db) != 0 || facts_reset_checked(old_plus_delta_db) != 0) {
+            if (facts_reset_local_db(new_db) != 0 || facts_reset_local_db(old_plus_delta_db) != 0) {
                 evaluation_error = 1;
                 break;
             }
@@ -497,7 +525,7 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
                 evaluation_error = 1;
                 break;
             }
-            if (facts_reset_checked(delta_db) != 0) {
+            if (facts_reset_local_db(delta_db) != 0) {
                 evaluation_error = 1;
                 break;
             }
@@ -509,10 +537,10 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
             total_derived += merged_derived;
         }
 
-        delete_facts(old_db);
-        delete_facts(delta_db);
-        delete_facts(new_db);
-        delete_facts(old_plus_delta_db);
+        delete_eval_scratch(old_db);
+        delete_eval_scratch(delta_db);
+        delete_eval_scratch(new_db);
+        delete_eval_scratch(old_plus_delta_db);
         free(idb_preds);
         if (evaluation_error)
             break;
@@ -563,11 +591,11 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 
     size_t total_derived = 0;
     int evaluation_error = 0;
-    s_facts *cumulative_delta_db = new_facts(facts->symbols, 256);
-    s_facts *cumulative_minus_db = new_facts(facts->symbols, 256);
+    s_facts *cumulative_delta_db = new_eval_scratch(facts->symbols, 256);
+    s_facts *cumulative_minus_db = new_eval_scratch(facts->symbols, 256);
     if (!cumulative_delta_db || !cumulative_minus_db) {
-        delete_facts(cumulative_delta_db);
-        delete_facts(cumulative_minus_db);
+        delete_eval_scratch(cumulative_delta_db);
+        delete_eval_scratch(cumulative_minus_db);
         free(rule_strata);
         return -1;
     }
@@ -590,17 +618,17 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 
     /* Phase 1: Deletions */
     for (int s = 0; !evaluation_error && s < num_strata; s++) {
-        s_facts *delta_db = new_facts(facts->symbols, 256);
-        s_facts *new_db = new_facts(facts->symbols, 256);
+        s_facts *delta_db = new_eval_scratch(facts->symbols, 256);
+        s_facts *new_db = new_eval_scratch(facts->symbols, 256);
         if (!delta_db || !new_db) {
-            delete_facts(delta_db);
-            delete_facts(new_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
             evaluation_error = 1;
             break;
         }
         if (facts_merge_count(delta_db, cumulative_minus_db, NULL) != 0) {
-            delete_facts(delta_db);
-            delete_facts(new_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
             evaluation_error = 1;
             break;
         }
@@ -654,24 +682,24 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 
             if (facts_merge_count(delta_db, new_db, NULL) != 0)
                 evaluation_error = 1;
-            if (facts_reset_checked(new_db) != 0)
+            if (facts_reset_local_db(new_db) != 0)
                 evaluation_error = 1;
         }
 
         if (evaluation_error) {
-            delete_facts(delta_db);
-            delete_facts(new_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
             break;
         }
 
         if (facts_count(delta_db) == 0) {
-            delete_facts(delta_db);
-            delete_facts(new_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
             continue;
         }
 
         while (1) {
-            if (facts_reset_checked(new_db) != 0) {
+            if (facts_reset_local_db(new_db) != 0) {
                 evaluation_error = 1;
                 break;
             }
@@ -756,7 +784,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
             }
             facts_cursor_stop(&fc);
 
-            if (facts_reset_checked(delta_db) != 0) {
+            if (facts_reset_local_db(delta_db) != 0) {
                 evaluation_error = 1;
                 break;
             }
@@ -765,8 +793,8 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                 break;
             }
         }
-        delete_facts(delta_db);
-        delete_facts(new_db);
+        delete_eval_scratch(delta_db);
+        delete_eval_scratch(new_db);
     }
     for (int s = 0; !evaluation_error && s < num_strata; s++) {
         const char **idb_preds = NULL;
@@ -786,25 +814,25 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
             break;
         }
 
-        s_facts *old_db = new_facts(facts->symbols, 256);
-        s_facts *delta_db = new_facts(facts->symbols, 256);
-        s_facts *new_db = new_facts(facts->symbols, 256);
-        s_facts *old_plus_delta_db = new_facts(facts->symbols, 256);
+        s_facts *old_db = new_eval_scratch(facts->symbols, 256);
+        s_facts *delta_db = new_eval_scratch(facts->symbols, 256);
+        s_facts *new_db = new_eval_scratch(facts->symbols, 256);
+        s_facts *old_plus_delta_db = new_eval_scratch(facts->symbols, 256);
         if (!old_db || !delta_db || !new_db || !old_plus_delta_db) {
-            delete_facts(old_db);
-            delete_facts(delta_db);
-            delete_facts(new_db);
-            delete_facts(old_plus_delta_db);
+            delete_eval_scratch(old_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
+            delete_eval_scratch(old_plus_delta_db);
             free(idb_preds);
             evaluation_error = 1;
             break;
         }
 
         if (facts_merge_count(delta_db, cumulative_delta_db, NULL) != 0) {
-            delete_facts(old_db);
-            delete_facts(delta_db);
-            delete_facts(new_db);
-            delete_facts(old_plus_delta_db);
+            delete_eval_scratch(old_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
+            delete_eval_scratch(old_plus_delta_db);
             free(idb_preds);
             evaluation_error = 1;
             break;
@@ -863,39 +891,39 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 
             if (facts_merge_count(delta_db, new_db, NULL) != 0 || facts_merge_count(cumulative_delta_db, new_db, NULL) != 0)
                 evaluation_error = 1;
-            if (facts_reset_checked(new_db) != 0)
+            if (facts_reset_local_db(new_db) != 0)
                 evaluation_error = 1;
         }
 
         if (evaluation_error) {
-            delete_facts(old_db);
-            delete_facts(delta_db);
-            delete_facts(new_db);
-            delete_facts(old_plus_delta_db);
+            delete_eval_scratch(old_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
+            delete_eval_scratch(old_plus_delta_db);
             free(idb_preds);
             break;
         }
 
         if (facts_count(delta_db) == 0) {
-            delete_facts(old_db);
-            delete_facts(delta_db);
-            delete_facts(new_db);
-            delete_facts(old_plus_delta_db);
+            delete_eval_scratch(old_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
+            delete_eval_scratch(old_plus_delta_db);
             free(idb_preds);
             continue;
         }
 
         if (facts_merge_count(old_db, delta_db, NULL) != 0) {
-            delete_facts(old_db);
-            delete_facts(delta_db);
-            delete_facts(new_db);
-            delete_facts(old_plus_delta_db);
+            delete_eval_scratch(old_db);
+            delete_eval_scratch(delta_db);
+            delete_eval_scratch(new_db);
+            delete_eval_scratch(old_plus_delta_db);
             free(idb_preds);
             evaluation_error = 1;
             break;
         }
         while (1) {
-            if (facts_reset_checked(new_db) != 0 || facts_reset_checked(old_plus_delta_db) != 0) {
+            if (facts_reset_local_db(new_db) != 0 || facts_reset_local_db(old_plus_delta_db) != 0) {
                 evaluation_error = 1;
                 break;
             }
@@ -985,7 +1013,7 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                 evaluation_error = 1;
                 break;
             }
-            if (facts_reset_checked(delta_db) != 0) {
+            if (facts_reset_local_db(delta_db) != 0) {
                 evaluation_error = 1;
                 break;
             }
@@ -998,15 +1026,15 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
             total_derived += merged_derived;
         }
 
-        delete_facts(old_db);
-        delete_facts(delta_db);
-        delete_facts(new_db);
-        delete_facts(old_plus_delta_db);
+        delete_eval_scratch(old_db);
+        delete_eval_scratch(delta_db);
+        delete_eval_scratch(new_db);
+        delete_eval_scratch(old_plus_delta_db);
         free(idb_preds);
     }
 
-    delete_facts(cumulative_delta_db);
-    delete_facts(cumulative_minus_db);
+    delete_eval_scratch(cumulative_delta_db);
+    delete_eval_scratch(cumulative_minus_db);
     free(rule_strata);
     return evaluation_error ? -1 : (int)total_derived;
 }

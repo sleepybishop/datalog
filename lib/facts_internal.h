@@ -9,5 +9,6 @@ void facts_register_internal_commit_summary_observer(s_facts *facts, f_facts_com
 int facts_justifications_stage(s_facts *facts, int preserve_existing);
 void facts_justifications_commit(s_facts *facts);
 void facts_justifications_discard(s_facts *facts);
+int facts_reset_local_db(s_facts *facts);
 
 #endif

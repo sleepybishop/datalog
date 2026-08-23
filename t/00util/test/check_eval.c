@@ -48,6 +48,38 @@ START_TEST(test_eval_transitive_closure)
 }
 END_TEST
 
+START_TEST(test_eval_scratch_databases_release_shared_symbols)
+{
+    s_intern *symbols = new_intern(1000);
+    s_facts *facts = new_facts(symbols, 1000);
+    s_datalog_program *program = new_datalog_program();
+    ck_assert(symbols != NULL);
+    ck_assert(facts != NULL);
+    ck_assert(program != NULL);
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?X <path> ?Y :- ?X <edge> ?Y .\n"), 0);
+    ck_assert(facts_add_spo(facts, "a", "edge", "b") != NULL);
+
+    s_set_item *a = intern_find_symbol(symbols, "a");
+    ck_assert(a != NULL);
+    unsigned long base_usage = a->usage;
+
+    ck_assert_int_eq(facts_datalog_eval(facts, program), 1);
+    a = intern_find_symbol(symbols, "a");
+    ck_assert(a != NULL);
+    ck_assert(a->usage == base_usage + 1);
+
+    ck_assert_int_eq(facts_datalog_eval(facts, program), 0);
+    a = intern_find_symbol(symbols, "a");
+    ck_assert(a != NULL);
+    ck_assert(a->usage == base_usage + 1);
+
+    delete_datalog_program(program);
+    delete_facts(facts);
+    ck_assert(intern_find_symbol(symbols, "a") == NULL);
+    delete_intern(symbols);
+}
+END_TEST
+
 START_TEST(test_eval_stratified_negation)
 {
     s_intern *sym = new_intern(1000);
@@ -493,6 +525,7 @@ Suite *eval_suite(void)
     tc_core = tcase_create("Core");
 
     tcase_add_test(tc_core, test_eval_transitive_closure);
+    tcase_add_test(tc_core, test_eval_scratch_databases_release_shared_symbols);
     tcase_add_test(tc_core, test_eval_stratified_negation);
     tcase_add_test(tc_core, test_eval_same_generation_cousins);
     tcase_add_test(tc_core, test_eval_transitive_retraction);

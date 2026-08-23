@@ -219,6 +219,81 @@ error:
     return -1;
 }
 
+int facts_reset_local_db(s_facts *facts)
+{
+    s_set_cursor sc;
+    s_set_item *si;
+    s_set replacement_index = {0};
+    s_hexastore *replacement_hexastore = NULL;
+    s_justification_graph *replacement_justifications = NULL;
+    s_intern *replacement_symbols = NULL;
+
+    if (!facts || !transaction_writer_owned(&facts->tx) || facts->tx.level != 0 || facts->tx.rollback.size != 0)
+        return -1;
+
+    /* Allocate every replacement before touching the live database. */
+    if (set_init_checked(&replacement_index, facts->index.max) != 0)
+        goto error;
+    replacement_hexastore = new_hexastore();
+    if (!replacement_hexastore)
+        goto error;
+    replacement_justifications = new_justification_graph();
+    if (!replacement_justifications)
+        goto error;
+    if (facts->symbols_delete) {
+        replacement_symbols = new_intern(facts->index.max);
+        if (!replacement_symbols)
+            goto error;
+    }
+
+    delete_justification_graph(facts->justifications_staging);
+    delete_justification_graph(facts->justifications);
+    facts->justifications_staging = NULL;
+    facts->justifications = replacement_justifications;
+    replacement_justifications = NULL;
+
+    // 1. Recycle all facts back into the fact arena pool
+    set_cursor_init(&facts->index, &sc);
+    while ((si = set_cursor_next(&sc))) {
+        s_fact *fact = (s_fact *)si->data;
+        intern_unstring(facts->symbols, fact->s);
+        intern_unstring(facts->symbols, fact->p);
+        intern_unstring(facts->symbols, fact->o);
+        arena_free_fact(fact);
+    }
+
+    // 2. Replace the hexastore index.
+    delete_hexastore(facts->hexastore);
+
+    facts->hexastore = replacement_hexastore;
+    replacement_hexastore = NULL;
+    facts->index_spo = facts->hexastore->trie_spo;
+    facts->index_pos = facts->hexastore->trie_pos;
+    facts->index_osp = facts->hexastore->trie_osp;
+
+    // 3. Replace the facts index hash set.
+    set_destroy(&facts->index);
+    facts->index = replacement_index;
+    memset(&replacement_index, 0, sizeof(replacement_index));
+
+    // 4. Replace an owned symbol table; shared tables were unreferenced above.
+    if (facts->symbols_delete) {
+        delete_intern(facts->symbols);
+        facts->symbols = replacement_symbols;
+        replacement_symbols = NULL;
+    }
+
+    return 0;
+
+error:
+    delete_intern(replacement_symbols);
+    delete_justification_graph(replacement_justifications);
+    delete_hexastore(replacement_hexastore);
+    if (replacement_index.items)
+        set_destroy(&replacement_index);
+    return -1;
+}
+
 s_facts *new_facts(s_intern *symbols, unsigned long max)
 {
     s_facts *facts = malloc(sizeof(s_facts));

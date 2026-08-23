@@ -51,6 +51,11 @@ int transaction_init_checked(s_transaction *tx)
 void transaction_destroy(s_transaction *tx)
 {
     assert(tx);
+    if (tx->owner_valid || tx->level != 0 || tx->rollback.size != 0)
+        abort();
+    assert(!tx->owner_valid);
+    assert(tx->level == 0);
+    assert(tx->rollback.size == 0);
     pthread_rwlock_destroy(&tx->rwlock);
     pthread_mutex_destroy(&tx->state_mutex);
     free(tx->rollback.entries);
