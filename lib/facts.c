@@ -55,12 +55,26 @@ static void encode_cursor_key(unsigned char *key, const s_fact *f, int index_typ
 
 void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
 {
-    assert(facts);
+    int result = facts_init_checked(facts, symbols, max);
+    assert(result == 0);
+    (void)result;
+}
+
+int facts_init_checked(s_facts *facts, s_intern *symbols, unsigned long max)
+{
+    if (!facts || max == 0)
+        return -1;
+    memset(facts, 0, sizeof(*facts));
     arena_init();
     facts->symbols = symbols ? symbols : new_intern(max);
     facts->symbols_delete = !symbols;
-    set_init(&facts->index, max);
+    if (!facts->symbols)
+        goto error;
+    if (set_init_checked(&facts->index, max) != 0)
+        goto error;
     facts->hexastore = new_hexastore();
+    if (!facts->hexastore)
+        goto error;
     facts->index_spo = facts->hexastore->trie_spo;
     facts->index_pos = facts->hexastore->trie_pos;
     facts->index_osp = facts->hexastore->trie_osp;
@@ -70,9 +84,24 @@ void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
     facts->owns_prog = 0;
     facts->disable_listener = 0;
     facts->justifications = new_justification_graph();
+    if (!facts->justifications)
+        goto error;
     facts->justifications_staging = NULL;
 
-    transaction_init(&facts->tx);
+    if (transaction_init_checked(&facts->tx) != 0)
+        goto error;
+    return 0;
+
+error:
+    delete_justification_graph(facts->justifications);
+    delete_hexastore(facts->hexastore);
+    if (facts->index.items)
+        set_destroy(&facts->index);
+    if (facts->symbols_delete)
+        delete_intern(facts->symbols);
+    memset(facts, 0, sizeof(*facts));
+    arena_destroy();
+    return -1;
 }
 
 void facts_destroy(s_facts *facts)
@@ -106,25 +135,45 @@ void facts_destroy(s_facts *facts)
 
 void facts_reset(s_facts *facts)
 {
-    unsigned long max;
-    f_facts_commit_observer commit_observer;
-    void *commit_observer_data;
-    f_facts_commit_summary_observer commit_summary_observer;
-    void *commit_summary_observer_data;
-    f_facts_commit_summary_observer internal_commit_summary_observer;
-    void *internal_commit_summary_observer_data;
-    f_facts_tx_listener listener;
-    void *listener_data;
-    f_facts_tx_listener internal_listener;
-    void *internal_listener_data;
+    int result = facts_reset_checked(facts);
+    assert(result == 0);
+    (void)result;
+}
+
+int facts_reset_checked(s_facts *facts)
+{
     s_set_cursor sc;
     s_set_item *si;
-    assert(facts);
+    s_set replacement_index = {0};
+    s_hexastore *replacement_hexastore = NULL;
+    s_justification_graph *replacement_justifications = NULL;
+    s_intern *replacement_symbols = NULL;
+    int has_lock;
+
+    if (!facts || transaction_writer_owned(&facts->tx))
+        return -1;
+    has_lock = transaction_acquire_writer(&facts->tx);
+
+    /* Allocate every replacement before touching the live database. */
+    if (set_init_checked(&replacement_index, facts->index.max) != 0)
+        goto error;
+    replacement_hexastore = new_hexastore();
+    if (!replacement_hexastore)
+        goto error;
+    replacement_justifications = new_justification_graph();
+    if (!replacement_justifications)
+        goto error;
+    if (facts->symbols_delete) {
+        replacement_symbols = new_intern(facts->index.max);
+        if (!replacement_symbols)
+            goto error;
+    }
 
     delete_justification_graph(facts->justifications_staging);
     delete_justification_graph(facts->justifications);
     facts->justifications_staging = NULL;
-    facts->justifications = new_justification_graph();
+    facts->justifications = replacement_justifications;
+    replacement_justifications = NULL;
 
     // 1. Recycle all facts back into the fact arena pool
     set_cursor_init(&facts->index, &sc);
@@ -136,49 +185,47 @@ void facts_reset(s_facts *facts)
         arena_free_fact(fact);
     }
 
-    // 2. Destroy and recreate the hexastore index
+    // 2. Replace the hexastore index.
     delete_hexastore(facts->hexastore);
-    facts->hexastore = new_hexastore();
+    facts->hexastore = replacement_hexastore;
+    replacement_hexastore = NULL;
     facts->index_spo = facts->hexastore->trie_spo;
     facts->index_pos = facts->hexastore->trie_pos;
     facts->index_osp = facts->hexastore->trie_osp;
 
-    // 3. Destroy and recreate the facts index hash set
-    max = facts->index.max;
+    // 3. Replace the facts index hash set.
     set_destroy(&facts->index);
-    set_init(&facts->index, max);
+    facts->index = replacement_index;
+    memset(&replacement_index, 0, sizeof(replacement_index));
 
-    // 4. Clear the symbol interning table
+    // 4. Replace an owned symbol table; shared tables were unreferenced above.
     if (facts->symbols_delete) {
         delete_intern(facts->symbols);
-        facts->symbols = new_intern(max);
+        facts->symbols = replacement_symbols;
+        replacement_symbols = NULL;
     }
 
-    // 5. Reset transaction data/state
-    commit_observer = facts->tx.commit_observer;
-    commit_observer_data = facts->tx.commit_observer_data;
-    commit_summary_observer = facts->tx.commit_summary_observer;
-    commit_summary_observer_data = facts->tx.commit_summary_observer_data;
-    internal_commit_summary_observer = facts->tx.internal_commit_summary_observer;
-    internal_commit_summary_observer_data = facts->tx.internal_commit_summary_observer_data;
-    listener = facts->tx.listener;
-    listener_data = facts->tx.listener_data;
-    internal_listener = facts->tx.internal_listener;
-    internal_listener_data = facts->tx.internal_listener_data;
-    transaction_destroy(&facts->tx);
-    transaction_init(&facts->tx);
-    facts_register_tx_listener(facts, listener, listener_data);
-    facts_register_internal_tx_listener(facts, internal_listener, internal_listener_data);
-    facts_register_commit_observer(facts, commit_observer, commit_observer_data);
-    facts_register_commit_summary_observer(facts, commit_summary_observer, commit_summary_observer_data);
-    facts_register_internal_commit_summary_observer(facts, internal_commit_summary_observer, internal_commit_summary_observer_data);
+    /* The transaction object and registered callbacks remain valid. */
+    transaction_release_writer(&facts->tx, has_lock);
+    return 0;
+
+error:
+    delete_intern(replacement_symbols);
+    delete_justification_graph(replacement_justifications);
+    delete_hexastore(replacement_hexastore);
+    if (replacement_index.items)
+        set_destroy(&replacement_index);
+    transaction_release_writer(&facts->tx, has_lock);
+    return -1;
 }
 
 s_facts *new_facts(s_intern *symbols, unsigned long max)
 {
     s_facts *facts = malloc(sizeof(s_facts));
-    if (facts)
-        facts_init(facts, symbols, max);
+    if (facts && facts_init_checked(facts, symbols, max) != 0) {
+        free(facts);
+        facts = NULL;
+    }
     return facts;
 }
 
@@ -319,18 +366,44 @@ static s_fact *facts_insert_fact_copy(s_facts *facts, const s_fact *f, int recor
     new->asserted_count = f->asserted_count;
     new->derived_count = f->derived_count;
     new->proof_count = f->asserted_count + f->derived_count;
-    facts_intern(facts, symbol_to_str(new->s));
-    facts_intern(facts, symbol_to_str(new->p));
-    facts_intern(facts, symbol_to_str(new->o));
-    if (record_rollback && facts_rollback_push(facts, ROLLBACK_REMOVE, new) != 0) {
+    Symbol s_ref = facts_intern(facts, symbol_to_str(new->s));
+    Symbol p_ref = facts_intern(facts, symbol_to_str(new->p));
+    Symbol o_ref = facts_intern(facts, symbol_to_str(new->o));
+    if (!s_ref || !p_ref || !o_ref) {
+        if (s_ref)
+            facts_unintern(facts, s_ref);
+        if (p_ref)
+            facts_unintern(facts, p_ref);
+        if (o_ref)
+            facts_unintern(facts, o_ref);
+        delete_fact(new);
+        return NULL;
+    }
+    if (hexastore_insert(facts->hexastore, new) != 0) {
         facts_unintern(facts, new->s);
         facts_unintern(facts, new->p);
         facts_unintern(facts, new->o);
         delete_fact(new);
         return NULL;
     }
-    hexastore_insert(facts->hexastore, new);
-    set_add(&facts->index, new, sizeof(Symbol) * 4);
+    s_set_item *index_item = set_add(&facts->index, new, sizeof(Symbol) * 4);
+    if (!index_item) {
+        hexastore_remove(facts->hexastore, new);
+        facts_unintern(facts, new->s);
+        facts_unintern(facts, new->p);
+        facts_unintern(facts, new->o);
+        delete_fact(new);
+        return NULL;
+    }
+    if (record_rollback && facts_rollback_push(facts, ROLLBACK_REMOVE, new) != 0) {
+        set_remove(&facts->index, index_item);
+        hexastore_remove(facts->hexastore, new);
+        facts_unintern(facts, new->s);
+        facts_unintern(facts, new->p);
+        facts_unintern(facts, new->o);
+        delete_fact(new);
+        return NULL;
+    }
     return new;
 }
 
@@ -381,6 +454,15 @@ s_fact *facts_add_spo_origin(s_facts *facts, const char *s, const char *p, const
     f.s = facts_intern(facts, s);
     f.p = facts_intern(facts, p);
     f.o = facts_intern(facts, o);
+    if (!f.s || !f.p || !f.o) {
+        if (f.s)
+            facts_unintern(facts, f.s);
+        if (f.p)
+            facts_unintern(facts, f.p);
+        if (f.o)
+            facts_unintern(facts, f.o);
+        return NULL;
+    }
     f.negated = NULL;
     fact_set_origin(&f, origin);
     s_fact *ret = facts_add_fact_origin(facts, &f, origin);
@@ -402,6 +484,8 @@ const char **spec_bindings_anon_assoc(s_facts *facts, p_spec spec)
     size_t count;
     assert(spec);
     count = spec_count_bindings(spec);
+    if (count > (SIZE_MAX - 1) / 2 || count * 2 + 1 > SIZE_MAX / sizeof(char *))
+        return NULL;
     bindings = calloc(count * 2 + 1, sizeof(char *));
     if (bindings) {
         size_t s = 0;
@@ -409,7 +493,12 @@ const char **spec_bindings_anon_assoc(s_facts *facts, p_spec spec)
         while (spec[s] || spec[s + 1]) {
             if (spec[s] && spec[s][0] == '?') {
                 *b++ = spec[s];
-                *b++ = facts_anon(facts, spec[s]);
+                *b = facts_anon(facts, spec[s]);
+                if (!*b) {
+                    free(bindings);
+                    return NULL;
+                }
+                b++;
             }
             s++;
         }
@@ -453,15 +542,11 @@ int facts_add(s_facts *facts, p_spec spec)
         if (f.o[0] == '?')
             f.o = assoc_get(anon, f.o);
 
-        s_fact db_fact;
-        db_fact.s = facts_intern(facts, f.s);
-        db_fact.p = facts_intern(facts, f.p);
-        db_fact.o = facts_intern(facts, f.o);
-        db_fact.negated = NULL;
-        facts_add_fact(facts, &db_fact);
-        facts_unintern(facts, db_fact.s);
-        facts_unintern(facts, db_fact.p);
-        facts_unintern(facts, db_fact.o);
+        if (!facts_add_spo(facts, f.s, f.p, f.o)) {
+            free(anon);
+            transaction_release_writer(&facts->tx, has_lock);
+            return -1;
+        }
     }
     free(anon);
     transaction_release_writer(&facts->tx, has_lock);
@@ -617,6 +702,8 @@ int facts_get_spo_snapshot(s_facts *facts, const char *s, const char *p, const c
 
 int facts_remove(s_facts *facts, p_spec spec)
 {
+    if (!facts || !spec)
+        return -1;
     s_facts_with_cursor wc;
     s_binding *bindings;
     s_fact_list *fl = NULL;
@@ -624,7 +711,12 @@ int facts_remove(s_facts *facts, p_spec spec)
     int found = 0;
     int has_lock = transaction_acquire_writer(&facts->tx);
     bindings = spec_bindings(spec);
-    facts_with(facts, bindings, &wc, spec);
+    if (!bindings || facts_with_checked(facts, bindings, &wc, spec) != 0) {
+        free(bindings);
+        transaction_release_writer(&facts->tx, has_lock);
+        return -1;
+    }
+    int error = 0;
     while (facts_with_cursor_next(&wc)) {
         s_spec_fact f;
         s_spec_cursor sc;
@@ -635,14 +727,23 @@ int facts_remove(s_facts *facts, p_spec spec)
             s_fact *dbf;
             spec_fact_bindings_resolve(&f, bindings);
             dbf = facts_get_spo(facts, f.s, f.p, f.o);
-            if (dbf) {
-                fl = fact_list_intern(fl, dbf);
+            if (dbf && !fact_list_find(fl, dbf)) {
+                s_fact_list *next = new_fact_list(dbf, fl);
+                if (!next) {
+                    error = 1;
+                    break;
+                }
+                fl = next;
             }
         }
+        if (error)
+            break;
     }
+    if (facts_with_cursor_error(&wc))
+        error = 1;
     facts_with_cursor_destroy(&wc);
     free(bindings);
-    fli = fl;
+    fli = error ? NULL : fl;
     while (fli) {
         if (facts_remove_fact(facts, fli->fact))
             found = 1;
@@ -650,7 +751,7 @@ int facts_remove(s_facts *facts, p_spec spec)
     }
     delete_fact_list(fl);
     transaction_release_writer(&facts->tx, has_lock);
-    return found;
+    return error ? -1 : found;
 }
 
 s_fact *facts_get_fact(s_facts *facts, s_fact *f)
@@ -876,10 +977,15 @@ void facts_with_spo(s_facts *facts, s_binding *bindings, s_facts_cursor *c, cons
 
 void facts_with(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_spec spec)
 {
+    (void)facts_with_checked(facts, bindings, c, spec);
+}
+
+int facts_with_checked(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_spec spec)
+{
     size_t facts_count;
-    assert(facts);
-    assert(c);
-    assert(spec);
+    if (!facts || !c || !spec)
+        return -1;
+    memset(c, 0, sizeof(*c));
     c->locked = transaction_acquire_reader(&facts->tx);
     facts_count = spec_count_facts(spec);
     c->facts = facts;
@@ -887,17 +993,32 @@ void facts_with(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_s
     bindings_nullify(c->bindings);
     c->facts_count = facts_count;
     if (facts_count > 0) {
+        if (facts_count > SIZE_MAX / sizeof(s_facts_with_cursor_level))
+            goto allocation_error;
         size_t total_ptrs = 0;
         for (size_t i = 0; i < facts_count; i++) {
-            total_ptrs += (facts_count - i) * 4 + 2;
+            size_t remaining = facts_count - i;
+            if (remaining > (SIZE_MAX - 2) / 4 || total_ptrs > SIZE_MAX - (remaining * 4 + 2))
+                goto allocation_error;
+            total_ptrs += remaining * 4 + 2;
         }
         size_t levels_sz = facts_count * sizeof(s_facts_with_cursor_level);
+        if (total_ptrs > SIZE_MAX / sizeof(const char *))
+            goto allocation_error;
         size_t specs_sz = total_ptrs * sizeof(const char *);
+        if (levels_sz > SIZE_MAX - specs_sz)
+            goto allocation_error;
         char *mem = calloc(1, levels_sz + specs_sz);
-        assert(mem);
+        if (!mem)
+            goto allocation_error;
         c->l = (s_facts_with_cursor_level *)mem;
         const char **spec_ptr = (const char **)(mem + levels_sz);
         c->spec = spec_expand(spec);
+        if (!c->spec) {
+            free(c->l);
+            c->l = NULL;
+            goto allocation_error;
+        }
         facts_spec_sort(facts, c->spec, facts_count);
         for (size_t i = 0; i < facts_count; i++) {
             size_t remaining = facts_count - i;
@@ -919,6 +1040,20 @@ void facts_with(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_s
     c->sorted_matches = NULL;
     c->sorted_count = 0;
     c->sorted_pos = 0;
+    c->error = 0;
+    return 0;
+
+allocation_error:
+    c->facts_count = 0;
+    c->error = -1;
+    transaction_release_reader(&facts->tx, c->locked);
+    c->locked = 0;
+    return -1;
+}
+
+int facts_with_cursor_error(const s_facts_with_cursor *c)
+{
+    return c ? c->error : -1;
 }
 
 void facts_with_cursor_destroy(s_facts_with_cursor *c)
@@ -1035,6 +1170,10 @@ int facts_with_cursor_next(s_facts_with_cursor *c)
         if (!c->sorted_matches && c->sorted_pos == 0) {
             size_t capacity = 16;
             c->sorted_matches = malloc(capacity * sizeof(s_cached_match));
+            if (!c->sorted_matches) {
+                c->error = -1;
+                return 0;
+            }
             c->sorted_count = 0;
 
             int bindings_count = 0;
@@ -1050,11 +1189,25 @@ int facts_with_cursor_next(s_facts_with_cursor *c)
             c->is_sorted = 0;
             while (facts_with_cursor_next(c)) {
                 if (c->sorted_count >= capacity) {
+                    if (capacity > SIZE_MAX / 2 || capacity * 2 > SIZE_MAX / sizeof(s_cached_match)) {
+                        c->error = -1;
+                        break;
+                    }
                     capacity *= 2;
-                    c->sorted_matches = realloc(c->sorted_matches, capacity * sizeof(s_cached_match));
+                    void *resized = realloc(c->sorted_matches, capacity * sizeof(s_cached_match));
+                    if (!resized) {
+                        c->error = -1;
+                        break;
+                    }
+                    c->sorted_matches = resized;
                 }
                 s_cached_match *matches = (s_cached_match *)c->sorted_matches;
-                matches[c->sorted_count].values = malloc(bindings_count * sizeof(const char *));
+                matches[c->sorted_count].values =
+                    bindings_count ? malloc((size_t)bindings_count * sizeof(const char *)) : NULL;
+                if (bindings_count && !matches[c->sorted_count].values) {
+                    c->error = -1;
+                    break;
+                }
                 for (int i = 0; i < bindings_count; i++) {
                     matches[c->sorted_count].values[i] = *c->bindings[i].value;
                 }
@@ -1065,6 +1218,9 @@ int facts_with_cursor_next(s_facts_with_cursor *c)
             c->limit = orig_limit;
             c->offset = orig_offset;
             c->result_count = 0;
+
+            if (c->error)
+                return 0;
 
             int sort_idx = -1;
             if (c->sort_var) {
@@ -1101,6 +1257,10 @@ int facts_with_cursor_next(s_facts_with_cursor *c)
             int bindings_count = 0;
             while (c->bindings && c->bindings[bindings_count].name) {
                 bindings_count++;
+            }
+            if (!matches || (bindings_count > 0 && !matches[c->sorted_pos].values)) {
+                c->error = -1;
+                return 0;
             }
             for (int i = 0; i < bindings_count; i++) {
                 *c->bindings[i].value = matches[c->sorted_pos].values[i];
@@ -1445,8 +1605,14 @@ static int facts_remove_all_derived(s_facts *facts)
     facts_with_0(facts, &cursor, NULL, NULL, NULL);
     s_fact *fact;
     while ((fact = facts_cursor_next(&cursor)) != NULL) {
-        if (fact->derived_count)
+        if (fact->derived_count) {
+            if (count >= capacity) {
+                facts_cursor_stop(&cursor);
+                free(derived);
+                return -1;
+            }
             derived[count++] = *fact;
+        }
     }
     facts_cursor_stop(&cursor);
 
@@ -1497,7 +1663,7 @@ int facts_attach_program(s_facts *facts, const s_datalog_program *prog)
     facts->disable_listener = 1;
     facts->prog = copy;
     facts->owns_prog = copy != NULL;
-    facts_register_internal_tx_listener(facts, copy ? rete_tx_listener : NULL, NULL);
+    facts_register_internal_tx_listener(facts, copy ? reactive_tx_listener : NULL, NULL);
 
     int result = facts_justifications_stage(facts, 0);
     if (result == 0)

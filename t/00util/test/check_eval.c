@@ -450,6 +450,40 @@ START_TEST(test_justification_graph_tracks_recursive_chain)
 }
 END_TEST
 
+static size_t retraction_physical_changes;
+
+static void retraction_summary_observer(s_facts *facts, const s_facts_commit_summary *summary, void *user_data)
+{
+    (void)facts;
+    (void)user_data;
+    retraction_physical_changes = summary->physical_changes;
+}
+
+START_TEST(test_justification_retraction_does_not_churn_unrelated_closure)
+{
+    s_facts *db = new_facts(NULL, 1000);
+    s_datalog_program *program = new_datalog_program();
+    ck_assert(db != NULL);
+    ck_assert(program != NULL);
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?X <result> yes :- ?X <source> yes .\n"), 0);
+    ck_assert(facts_add_spo(db, "affected", "source", "yes"));
+    ck_assert(facts_add_spo(db, "unrelated", "source", "yes"));
+    ck_assert_int_eq(facts_attach_program(db, program), 0);
+    delete_datalog_program(program);
+    facts_register_commit_summary_observer(db, retraction_summary_observer, NULL);
+    retraction_physical_changes = 0;
+
+    ck_assert_int_eq(facts_transaction_begin(db), 0);
+    ck_assert_int_eq(facts_remove_spo(db, "affected", "source", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(db), 0);
+
+    ck_assert_int_eq(facts_contains_spo(db, "affected", "result", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "unrelated", "result", "yes"), 1);
+    ck_assert_int_eq(retraction_physical_changes, 2);
+    delete_facts(db);
+}
+END_TEST
+
 Suite *eval_suite(void)
 {
     Suite *s;
@@ -471,6 +505,7 @@ Suite *eval_suite(void)
     tcase_add_test(tc_core, test_listener_failure_rolls_back_reactive_closure);
     tcase_add_test(tc_core, test_justification_graph_tracks_alternative_grounded_proofs);
     tcase_add_test(tc_core, test_justification_graph_tracks_recursive_chain);
+    tcase_add_test(tc_core, test_justification_retraction_does_not_churn_unrelated_closure);
 
     suite_add_tcase(s, tc_core);
     return s;

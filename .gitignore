@@ -1,5 +1,5 @@
 rst
-bench
+/bench
 *.o
 *.d
 *.a
@@ -13,6 +13,7 @@ t/00util/bench/benchmark_set_get
 t/00util/bench/benchmark_set_insert
 t/00util/bench/benchmark_set_insert_overflow
 t/00util/bench/benchmark_set_remove
+t/00util/bench/benchmark_reactive_retraction
 t/00util/bench/fixtures/
 libdatalog.la
 .core
@@ -31,6 +32,7 @@ t/00util/test/check_movie_integration
 t/00util/test/check_rule
 t/00util/test/check_sparql
 t/00util/test/check_triejoin
+t/00util/test/check_linda
 sparql_repl
 examples/linda_demo
 examples/rete_demo

@@ -33,7 +33,9 @@ static const char *resolve_term(const char *term, s_binding *bindings)
 static void eval_solution_cb(s_binding *bindings, void *user_data)
 {
     s_eval_cb_data *data = (s_eval_cb_data *)user_data;
-    if (data->evaluation_error && *data->evaluation_error)
+    if (!data || !data->evaluation_error || !data->rule || !data->main_facts || !data->target_db)
+        return;
+    if (*data->evaluation_error)
         return;
     const s_datalog_rule *rule = data->rule;
 
@@ -383,8 +385,10 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
 
         /* 4. Semi-Naive Fixed-point loop */
         while (1) {
-            facts_reset(new_db);
-            facts_reset(old_plus_delta_db);
+            if (facts_reset_checked(new_db) != 0 || facts_reset_checked(old_plus_delta_db) != 0) {
+                evaluation_error = 1;
+                break;
+            }
             if (facts_merge_count(old_plus_delta_db, old_db, NULL) != 0 ||
                 facts_merge_count(old_plus_delta_db, delta_db, NULL) != 0) {
                 evaluation_error = 1;
@@ -493,7 +497,10 @@ static int facts_datalog_eval_locked(s_facts *facts, const s_datalog_program *pr
                 evaluation_error = 1;
                 break;
             }
-            facts_reset(delta_db);
+            if (facts_reset_checked(delta_db) != 0) {
+                evaluation_error = 1;
+                break;
+            }
             merged_derived = 0;
             if (facts_merge_count(delta_db, new_db, NULL) != 0 || facts_merge_derived_count(facts, new_db, &merged_derived) != 0) {
                 evaluation_error = 1;
@@ -647,7 +654,8 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 
             if (facts_merge_count(delta_db, new_db, NULL) != 0)
                 evaluation_error = 1;
-            facts_reset(new_db);
+            if (facts_reset_checked(new_db) != 0)
+                evaluation_error = 1;
         }
 
         if (evaluation_error) {
@@ -663,7 +671,10 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
         }
 
         while (1) {
-            facts_reset(new_db);
+            if (facts_reset_checked(new_db) != 0) {
+                evaluation_error = 1;
+                break;
+            }
             size_t iter_derived = 0;
             for (size_t r = 0; r < prog->rule_count; r++) {
                 if (rule_strata[r] != s)
@@ -745,7 +756,10 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
             }
             facts_cursor_stop(&fc);
 
-            facts_reset(delta_db);
+            if (facts_reset_checked(delta_db) != 0) {
+                evaluation_error = 1;
+                break;
+            }
             if (facts_merge_count(delta_db, new_db, NULL) != 0 || facts_merge_count(cumulative_minus_db, new_db, NULL) != 0) {
                 evaluation_error = 1;
                 break;
@@ -849,7 +863,8 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
 
             if (facts_merge_count(delta_db, new_db, NULL) != 0 || facts_merge_count(cumulative_delta_db, new_db, NULL) != 0)
                 evaluation_error = 1;
-            facts_reset(new_db);
+            if (facts_reset_checked(new_db) != 0)
+                evaluation_error = 1;
         }
 
         if (evaluation_error) {
@@ -880,8 +895,10 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
             break;
         }
         while (1) {
-            facts_reset(new_db);
-            facts_reset(old_plus_delta_db);
+            if (facts_reset_checked(new_db) != 0 || facts_reset_checked(old_plus_delta_db) != 0) {
+                evaluation_error = 1;
+                break;
+            }
             if (facts_merge_count(old_plus_delta_db, old_db, NULL) != 0 ||
                 facts_merge_count(old_plus_delta_db, delta_db, NULL) != 0) {
                 evaluation_error = 1;
@@ -968,7 +985,10 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
                 evaluation_error = 1;
                 break;
             }
-            facts_reset(delta_db);
+            if (facts_reset_checked(delta_db) != 0) {
+                evaluation_error = 1;
+                break;
+            }
             size_t merged_derived = 0;
             if (facts_merge_count(delta_db, new_db, NULL) != 0 || facts_merge_count(cumulative_delta_db, new_db, NULL) != 0 ||
                 facts_merge_derived_count(facts, new_db, &merged_derived) != 0) {
@@ -991,7 +1011,122 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
     return evaluation_error ? -1 : (int)total_derived;
 }
 
-int rete_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
+typedef struct invalidation_event {
+    char *s;
+    char *p;
+    char *o;
+    int negated;
+} s_invalidation_event;
+
+static void invalidation_events_destroy(s_invalidation_event *events, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        free(events[i].s);
+        free(events[i].p);
+        free(events[i].o);
+    }
+    free(events);
+}
+
+static int invalidation_event_append(s_invalidation_event **events, size_t *count, const char *s, const char *p,
+                                     const char *o, int negated)
+{
+    for (size_t i = 0; i < *count; i++) {
+        if ((*events)[i].negated == negated && strcmp((*events)[i].s, s) == 0 &&
+            strcmp((*events)[i].p, p) == 0 && strcmp((*events)[i].o, o) == 0)
+            return 0;
+    }
+    if (*count == SIZE_MAX / sizeof(**events))
+        return -1;
+    s_invalidation_event *resized = realloc(*events, (*count + 1) * sizeof(**events));
+    if (!resized)
+        return -1;
+    *events = resized;
+    s_invalidation_event *event = &resized[*count];
+    memset(event, 0, sizeof(*event));
+    event->s = strdup(s);
+    event->p = strdup(p);
+    event->o = strdup(o);
+    event->negated = negated;
+    if (!event->s || !event->p || !event->o) {
+        free(event->s);
+        free(event->p);
+        free(event->o);
+        memset(event, 0, sizeof(*event));
+        return -1;
+    }
+    (*count)++;
+    return 0;
+}
+
+static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entry *entries, size_t entry_count,
+                                           int *requires_closure_scan)
+{
+    s_invalidation_event *events = NULL;
+    size_t event_count = 0;
+    *requires_closure_scan = 0;
+    for (size_t i = 0; i < entry_count; i++) {
+        if (entries[i].action == ROLLBACK_ADD) {
+            *requires_closure_scan = 1;
+            if (invalidation_event_append(&events, &event_count, symbol_to_str(entries[i].fact.s),
+                                          symbol_to_str(entries[i].fact.p), symbol_to_str(entries[i].fact.o), 0) != 0)
+                goto error;
+        } else if (entries[i].action == ROLLBACK_REMOVE) {
+            if (invalidation_event_append(&events, &event_count, symbol_to_str(entries[i].fact.s),
+                                          symbol_to_str(entries[i].fact.p), symbol_to_str(entries[i].fact.o), 1) != 0)
+                goto error;
+        }
+    }
+
+    for (size_t cursor = 0; cursor < event_count; cursor++) {
+        s_justification_support *conclusions = NULL;
+        size_t conclusion_count = 0;
+        int removed = justification_graph_remove_support(
+            facts->justifications_staging, events[cursor].s, events[cursor].p, events[cursor].o,
+            events[cursor].negated, &conclusions, &conclusion_count);
+        if (removed < 0) {
+            justification_support_array_destroy(conclusions, conclusion_count);
+            goto error;
+        }
+        if (events[cursor].negated && removed > 0)
+            *requires_closure_scan = 1;
+
+        for (size_t i = 0; i < conclusion_count; i++) {
+            s_justification_support *conclusion = &conclusions[i];
+            if (justification_graph_count(facts->justifications_staging, conclusion->s, conclusion->p,
+                                          conclusion->o) != 0)
+                continue;
+            s_fact_support support;
+            int found = facts_get_support_spo(facts, conclusion->s, conclusion->p, conclusion->o, &support);
+            if (found < 0) {
+                justification_support_array_destroy(conclusions, conclusion_count);
+                goto error;
+            }
+            if (found > 0 && support.derived) {
+                int disappears = support.asserted == 0;
+                if (facts_remove_spo_origin(facts, conclusion->s, conclusion->p, conclusion->o,
+                                            FACT_ORIGIN_DERIVED) < 0) {
+                    justification_support_array_destroy(conclusions, conclusion_count);
+                    goto error;
+                }
+                if (disappears && invalidation_event_append(&events, &event_count, conclusion->s, conclusion->p,
+                                                            conclusion->o, 0) != 0) {
+                    justification_support_array_destroy(conclusions, conclusion_count);
+                    goto error;
+                }
+            }
+        }
+        justification_support_array_destroy(conclusions, conclusion_count);
+    }
+    invalidation_events_destroy(events, event_count);
+    return 0;
+
+error:
+    invalidation_events_destroy(events, event_count);
+    return -1;
+}
+
+int reactive_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
 {
     (void)user_data;
     if (facts->disable_listener) {
@@ -1002,66 +1137,24 @@ int rete_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t ent
     }
 
     facts->disable_listener = 1;
-    int rebuild = 0;
-    int has_negation = 0;
-    for (size_t r = 0; r < facts->prog->rule_count && !has_negation; r++) {
-        for (size_t b = 0; b < facts->prog->rules[r].body_count; b++) {
-            if (facts->prog->rules[r].body[b].negated) {
-                has_negation = 1;
-                break;
-            }
-        }
-    }
-    for (size_t i = 0; i < entry_count; i++) {
-        if (entries[i].action == ROLLBACK_ADD || (has_negation && entries[i].action == ROLLBACK_REMOVE)) {
-            rebuild = 1;
-            break;
-        }
-    }
-
-    if (facts_justifications_stage(facts, !rebuild) != 0) {
+    if (facts_justifications_stage(facts, 1) != 0) {
         facts->disable_listener = 0;
         return -1;
     }
 
-    if (rebuild) {
-        s_fact_list *derived = NULL;
-        s_facts_cursor cursor;
-        facts_with_0(facts, &cursor, NULL, NULL, NULL);
-        s_fact *fact;
-        while ((fact = facts_cursor_next(&cursor)) != NULL) {
-            if (fact->derived_count) {
-                s_fact_list *next = fact_list_intern(derived, fact);
-                if (!next) {
-                    facts_cursor_stop(&cursor);
-                    delete_fact_list(derived);
-                    facts_justifications_discard(facts);
-                    facts->disable_listener = 0;
-                    return -1;
-                }
-                derived = next;
-            }
-        }
-        facts_cursor_stop(&cursor);
-        int result = 0;
-        for (s_fact_list *item = derived; item; item = item->next) {
-            if (facts_remove_fact_origin(facts, item->fact, FACT_ORIGIN_DERIVED) < 0) {
-                result = -1;
-                break;
-            }
-        }
-        delete_fact_list(derived);
-        if (result == 0 && facts_datalog_eval(facts, facts->prog) < 0)
-            result = -1;
-        facts->disable_listener = 0;
-        if (result != 0)
-            facts_justifications_discard(facts);
-        return result;
-    } else {
-        int result = facts_datalog_eval_incremental(facts, facts->prog, entries, entry_count);
-        facts->disable_listener = 0;
-        if (result < 0)
-            facts_justifications_discard(facts);
-        return result < 0 ? -1 : 0;
+    int requires_closure_scan = 0;
+    int result = facts_invalidate_justifications(facts, entries, entry_count, &requires_closure_scan);
+    if (result == 0) {
+        result = requires_closure_scan ? facts_datalog_eval(facts, facts->prog)
+                                       : facts_datalog_eval_incremental(facts, facts->prog, entries, entry_count);
     }
+    facts->disable_listener = 0;
+    if (result < 0)
+        facts_justifications_discard(facts);
+    return result < 0 ? -1 : 0;
+}
+
+int rete_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
+{
+    return reactive_tx_listener(facts, entries, entry_count, user_data);
 }

@@ -32,7 +32,7 @@ typedef struct facts {
     // Decoupled Transactions
     s_transaction tx;
 
-    // Reactive Rete-like Rule Evaluation
+    // Reactive semi-naive Datalog evaluation and truth maintenance.
     s_datalog_program *prog;
     int owns_prog;
     int disable_listener;
@@ -62,9 +62,11 @@ typedef struct facts_read_guard {
 } s_facts_read_guard;
 
 void facts_init(s_facts *facts, s_intern *symbols, unsigned long max);
+int facts_init_checked(s_facts *facts, s_intern *symbols, unsigned long max);
 
 void facts_destroy(s_facts *facts);
 void facts_reset(s_facts *facts);
+int facts_reset_checked(s_facts *facts);
 
 s_facts *new_facts(s_intern *symbols, unsigned long max);
 
@@ -186,14 +188,17 @@ typedef struct facts_with_cursor {
     void *sorted_matches;
     size_t sorted_count;
     size_t sorted_pos;
+    int error;
 } s_facts_with_cursor;
 
 void facts_with(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_spec spec);
+int facts_with_checked(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_spec spec);
 void facts_spec_sort(s_facts *facts, p_spec spec, size_t count);
 
 void facts_with_cursor_destroy(s_facts_with_cursor *c);
 
 int facts_with_cursor_next(s_facts_with_cursor *c);
+int facts_with_cursor_error(const s_facts_with_cursor *c);
 
 /* Borrowed result; prefer facts_get_prop_copy outside a read guard. */
 const char *facts_get_prop(s_facts *facts, const char *s, const char *p);

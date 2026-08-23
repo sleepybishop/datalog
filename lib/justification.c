@@ -137,3 +137,89 @@ size_t justification_graph_count(const s_justification_graph *graph, const char 
     }
     return count;
 }
+
+void justification_support_array_destroy(s_justification_support *items, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        free(items[i].s);
+        free(items[i].p);
+        free(items[i].o);
+    }
+    free(items);
+}
+
+static int justification_uses_support(const s_justification *item, const char *s, const char *p, const char *o,
+                                      int negated)
+{
+    for (size_t i = 0; i < item->support_count; i++) {
+        const s_justification_support *support = &item->supports[i];
+        if (support->negated == negated && strcmp(support->s, s) == 0 && strcmp(support->p, p) == 0 &&
+            strcmp(support->o, o) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int conclusion_append(s_justification_support **items, size_t *count, const s_justification *proof)
+{
+    for (size_t i = 0; i < *count; i++) {
+        if (strcmp((*items)[i].s, proof->s) == 0 && strcmp((*items)[i].p, proof->p) == 0 &&
+            strcmp((*items)[i].o, proof->o) == 0)
+            return 0;
+    }
+    if (*count == SIZE_MAX / sizeof(**items))
+        return -1;
+    s_justification_support *resized = realloc(*items, (*count + 1) * sizeof(**items));
+    if (!resized)
+        return -1;
+    *items = resized;
+    s_justification_support *item = &resized[*count];
+    memset(item, 0, sizeof(*item));
+    item->s = strdup(proof->s);
+    item->p = strdup(proof->p);
+    item->o = strdup(proof->o);
+    if (!item->s || !item->p || !item->o) {
+        free(item->s);
+        free(item->p);
+        free(item->o);
+        memset(item, 0, sizeof(*item));
+        return -1;
+    }
+    (*count)++;
+    return 0;
+}
+
+int justification_graph_remove_support(s_justification_graph *graph, const char *s, const char *p, const char *o,
+                                       int negated, s_justification_support **conclusions_out,
+                                       size_t *conclusion_count_out)
+{
+    if (!graph || !s || !p || !o || !conclusions_out || !conclusion_count_out)
+        return -1;
+    *conclusions_out = NULL;
+    *conclusion_count_out = 0;
+
+    for (size_t i = 0; i < graph->count; i++) {
+        if (justification_uses_support(&graph->items[i], s, p, o, negated) &&
+            conclusion_append(conclusions_out, conclusion_count_out, &graph->items[i]) != 0) {
+            justification_support_array_destroy(*conclusions_out, *conclusion_count_out);
+            *conclusions_out = NULL;
+            *conclusion_count_out = 0;
+            return -1;
+        }
+    }
+
+    int removed = 0;
+    for (size_t i = 0; i < graph->count;) {
+        if (!justification_uses_support(&graph->items[i], s, p, o, negated)) {
+            i++;
+            continue;
+        }
+        justification_destroy(&graph->items[i]);
+        graph->count--;
+        if (i < graph->count)
+            memmove(&graph->items[i], &graph->items[i + 1], (graph->count - i) * sizeof(*graph->items));
+        memset(&graph->items[graph->count], 0, sizeof(*graph->items));
+        removed++;
+    }
+    return removed;
+}

@@ -205,6 +205,19 @@ START_TEST(test_facts_reset)
 }
 END_TEST
 
+START_TEST(test_facts_reset_rejects_active_transaction)
+{
+    s_facts *f = new_facts(NULL, 100);
+    ck_assert(f);
+    ck_assert_int_eq(facts_transaction_begin(f), 0);
+    ck_assert(facts_add_spo(f, "still", "in", "transaction"));
+    ck_assert_int_eq(facts_reset_checked(f), -1);
+    ck_assert_int_eq(facts_contains_spo(f, "still", "in", "transaction"), 1);
+    ck_assert_int_eq(facts_transaction_rollback(f), 0);
+    delete_facts(f);
+}
+END_TEST
+
 START_TEST(test_facts_new_delete)
 {
     s_facts *f;
@@ -2224,6 +2237,7 @@ Suite *facts_suite(void)
     tcase_add_test(tc_init, test_shared_symbol_references_are_released);
     tcase_add_test(tc_init, test_facts_new_delete);
     tcase_add_test(tc_init, test_facts_reset);
+    tcase_add_test(tc_init, test_facts_reset_rejects_active_transaction);
     suite_add_tcase(s, tc_init);
     tc_add_fact = tcase_create("Add fact");
     tcase_add_checked_fixture(tc_add_fact, setup_add_fact, teardown_add_fact);

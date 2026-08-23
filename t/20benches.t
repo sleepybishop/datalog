@@ -21,7 +21,8 @@ subtest "bench set" => sub {
         "benchmark_set_get",
         "benchmark_facts_with",
         "benchmark_set_add_overflow",
-        "benchmark_set_remove"
+        "benchmark_set_remove",
+        "benchmark_reactive_retraction"
     );
     foreach (@benches) {
         my $t0 = [gettimeofday];

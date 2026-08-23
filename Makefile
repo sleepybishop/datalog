@@ -45,7 +45,8 @@ t/00util/bench/benchmark_facts_with\
 t/00util/bench/benchmark_set_add\
 t/00util/bench/benchmark_set_add_overflow\
 t/00util/bench/benchmark_set_get\
-t/00util/bench/benchmark_set_remove
+t/00util/bench/benchmark_set_remove\
+t/00util/bench/benchmark_reactive_retraction
 
 CPPFLAGS = -Iinclude -Ideps/rax -D_DEFAULT_SOURCE
 CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC -pthread
@@ -79,6 +80,8 @@ t/00util/bench/benchmark_set_add_overflow: t/00util/bench/benchmark_set_add_over
 t/00util/bench/benchmark_set_get: t/00util/bench/benchmark_set_get.o $(OBJ)
 
 t/00util/bench/benchmark_set_remove: t/00util/bench/benchmark_set_remove.o $(OBJ)
+
+t/00util/bench/benchmark_reactive_retraction: t/00util/bench/benchmark_reactive_retraction.o $(OBJ)
 
 t/00util/test/check_fact: t/00util/test/check_fact.o $(OBJ)
 
@@ -126,4 +129,11 @@ indent:
 scan:
 	scan-build $(MAKE) clean all
 
-.PHONY: all check clean indent scan
+check-asan:
+	ASAN_OPTIONS=detect_leaks=0 $(MAKE) -B check CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
+
+check-tsan:
+	$(MAKE) -B t/00util/test/check_linda CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
+	./t/00util/test/check_linda
+
+.PHONY: all check check-asan check-tsan clean indent scan
