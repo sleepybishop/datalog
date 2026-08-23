@@ -3,6 +3,7 @@ bench
 *.o
 *.d
 *.a
+.build-config
 t/00util/bench/benchmark_set
 t/00util/bench/benchmark_facts_add
 t/00util/bench/benchmark_facts_with

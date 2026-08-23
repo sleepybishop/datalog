@@ -47,13 +47,23 @@ t/00util/bench/benchmark_set_get\
 t/00util/bench/benchmark_set_remove
 
 CPPFLAGS = -Iinclude -Ideps/rax -D_DEFAULT_SOURCE
-CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC
+CFLAGS = -DNDEBUG -Os -g -W -Wall -Werror -std=c11 -pedantic -fPIC -pthread
 CPPFLAGS += -MMD -MP
-LDLIBS = -lm
+LDLIBS = -lm -pthread
 
 DEPS=$(OBJ:.o=.d) $(TEST_UTILS:=.d) $(BENCH_UTILS:=.d) sparql_repl.d deps/linenoise/linenoise.d
+BUILD_CONFIG=.build-config
 
 -include $(DEPS)
+
+.PHONY: FORCE
+FORCE:
+
+$(BUILD_CONFIG): FORCE
+	@config='CC=$(CC) CPPFLAGS=$(CPPFLAGS) CFLAGS=$(CFLAGS) LDFLAGS=$(LDFLAGS) LDLIBS=$(LDLIBS)'; \
+	printf '%s\n' "$$config" | cmp -s - $@ || printf '%s\n' "$$config" > $@
+
+$(OBJ) $(TEST_UTILS:=.o) $(BENCH_UTILS:=.o) sparql_repl.o deps/linenoise/linenoise.o: $(BUILD_CONFIG)
 
 all: libdatalog.a sparql_repl
 
@@ -94,7 +104,7 @@ t/00util/test/check_magic: t/00util/test/check_magic.o $(OBJ)
 t/00util/test/check_linda: t/00util/test/check_linda.o $(OBJ)
 
 
-check: CFLAGS=-O2 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused
+check: CFLAGS=-O2 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread
 check: $(TEST_UTILS) $(BENCH_UTILS);
 	prove -I. -v t/*.t
 
@@ -106,7 +116,7 @@ sparql_repl: sparql_repl.o deps/linenoise/linenoise.o $(OBJ)
 
 
 clean:
-	$(RM) *.o *.a *.gperf *.prof t/00util/bench/*.o t/00util/test/*.o deps/linenoise/*.o sparql_repl $(TEST_UTILS) $(BENCH_UTILS) $(OBJ) $(DEPS)
+	$(RM) *.o *.a *.gperf *.prof t/00util/bench/*.o t/00util/test/*.o deps/linenoise/*.o sparql_repl $(TEST_UTILS) $(BENCH_UTILS) $(OBJ) $(DEPS) $(BUILD_CONFIG)
 
 
 indent:

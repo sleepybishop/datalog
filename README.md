@@ -15,8 +15,32 @@ The underlying engine has been extensively refactored for improved performance a
 - **Transactions**: Supports nested thread-safe transactions with full rollback capabilities, protected by a multiple-reader/single-writer lock.
 - **Reactive Datalog**: Committed base-fact changes maintain a stratified derived layer. Positive insertions use semi-naive incremental evaluation; deletions and negation-sensitive changes rebuild derived facts to preserve correctness across alternate derivations.
 - **Explicit Provenance**: Facts independently record asserted and derived support, so retracting one support class does not erase a tuple that remains true through the other. `facts_get_support_spo()` exposes this summary.
-- **Linda Coordination**: The same fact store can act as a Linda tuplespace with blocking, non-blocking, and timed operations. Reusable compiled patterns remove binding allocation from hot coordination loops, and waiters are notified only after a changed transaction commits.
+- **Linda Coordination**: The same fact store can act as a Linda tuplespace with blocking, non-blocking, and timed operations. Reusable compiled patterns remove binding allocation from hot coordination loops, and post-commit subject summaries wake only wildcard and affected waiter partitions.
+- **Safe Concurrent Reads**: Containment checks, owning snapshots, copied properties, and nestable read guards avoid leaking mutable storage across write transactions.
+- **Managed Rule Programs**: Atomic deep-copy attachment recomputes the derived layer without exposing caller-owned rule memory.
 - **SPARQL REPL**: Features a basic Ragel-compiled SPARQL query parser (SELECT/ASK/INSERT) and an interactive CLI REPL powered by (`linenoise`).
+
+## Reactive usage
+
+`facts_attach_program()` takes a deep copy and atomically rebuilds the derived layer, so the input program may be freed immediately. Base changes become reactive when their outer transaction commits:
+
+```c
+s_facts *db = new_facts(NULL, 1024);
+s_datalog_program *program = new_datalog_program();
+datalog_program_parse_rules(program, "?x <path> ?y :- ?x <edge> ?y .");
+facts_attach_program(db, program);
+delete_datalog_program(program);
+
+facts_transaction_begin(db);
+facts_add_spo(db, "a", "edge", "b");
+facts_transaction_commit(db);
+
+if (facts_contains_spo(db, "a", "path", "b") > 0) {
+    /* The derived tuple is visible here. */
+}
+```
+
+Use `facts_get_spo_snapshot()` or `facts_get_prop_copy()` when a value must outlive a read call. Legacy pointer-returning lookups remain available, but retaining their results requires a `facts_read_guard`.
 
 ## License
 

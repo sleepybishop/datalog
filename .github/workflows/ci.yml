@@ -3,11 +3,35 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  ci:
-    runs-on: ${{ matrix.os }}
+  tests:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: ["ubuntu-latest"]
+        compiler: [gcc, clang]
+
+    env:
+      CC: ${{ matrix.compiler }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tests
+        run: make -B check
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      ASAN_OPTIONS: detect_leaks=0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ASan and UBSan
+        run: make -B check CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
+
+  analyzer:
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -16,9 +40,6 @@ jobs:
         run: |
           sudo apt update
           sudo apt install clang-tools
-
-      - name: Tests
-        run: make check
 
       - name: Clang Analyzer
         run: make scan
