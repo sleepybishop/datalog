@@ -128,14 +128,16 @@ START_TEST(test_eval_transitive_retraction)
 {
     s_intern *sym = new_intern(1000);
     s_facts *db = new_facts(sym, 1000);
-    db->prog = new_datalog_program();
+    s_datalog_program *prog = new_datalog_program();
 
     const char *rules = "?X <grandparent> ?Z :- ?X <parent> ?Y, ?Y <parent> ?Z .\n"
                         "?X <ancestor> ?Y :- ?X <parent> ?Y .\n"
                         "?X <ancestor> ?Z :- ?X <parent> ?Y, ?Y <ancestor> ?Z .\n";
 
-    int parse_ret = datalog_program_parse_rules(db->prog, rules);
+    int parse_ret = datalog_program_parse_rules(prog, rules);
     ck_assert_int_eq(0, parse_ret);
+    ck_assert_int_eq(facts_attach_program(db, prog), 0);
+    delete_datalog_program(prog);
 
     facts_transaction_begin(db);
     facts_add_spo(db, "Alice", "parent", "Bob");
@@ -153,7 +155,6 @@ START_TEST(test_eval_transitive_retraction)
     ck_assert(!facts_get_spo(db, "Alice", "grandparent", "Charlie"));
     ck_assert(!facts_get_spo(db, "Alice", "ancestor", "Charlie"));
 
-    delete_datalog_program(db->prog);
     delete_facts(db);
     delete_intern(sym);
 }
@@ -163,12 +164,14 @@ START_TEST(test_eval_reactive_negation)
 {
     s_intern *sym = new_intern(1000);
     s_facts *db = new_facts(sym, 1000);
-    db->prog = new_datalog_program();
+    s_datalog_program *prog = new_datalog_program();
 
     const char *rules = "?X <can_fly> yes :- ?X <is_bird> yes, NOT( ?X <is_penguin> yes ) .\n";
 
-    int parse_ret = datalog_program_parse_rules(db->prog, rules);
+    int parse_ret = datalog_program_parse_rules(prog, rules);
     ck_assert_int_eq(0, parse_ret);
+    ck_assert_int_eq(facts_attach_program(db, prog), 0);
+    delete_datalog_program(prog);
 
     /* Tweety is a bird */
     facts_transaction_begin(db);
@@ -191,7 +194,6 @@ START_TEST(test_eval_reactive_negation)
 
     ck_assert(facts_get_spo(db, "Tweety", "can_fly", "yes"));
 
-    delete_datalog_program(db->prog);
     delete_facts(db);
     delete_intern(sym);
 }
@@ -201,10 +203,12 @@ START_TEST(test_eval_preserves_independent_asserted_and_derived_support)
 {
     s_intern *sym = new_intern(1000);
     s_facts *db = new_facts(sym, 1000);
-    db->prog = new_datalog_program();
+    s_datalog_program *prog = new_datalog_program();
     ck_assert_int_eq(datalog_program_parse_rules(
-                         db->prog, "?X <grandparent> ?Z :- ?X <parent> ?Y, ?Y <parent> ?Z .\n"),
+                         prog, "?X <grandparent> ?Z :- ?X <parent> ?Y, ?Y <parent> ?Z .\n"),
                      0);
+    ck_assert_int_eq(facts_attach_program(db, prog), 0);
+    delete_datalog_program(prog);
 
     ck_assert_int_eq(facts_transaction_begin(db), 0);
     ck_assert(facts_add_spo(db, "Alice", "grandparent", "Charlie"));
@@ -233,7 +237,6 @@ START_TEST(test_eval_preserves_independent_asserted_and_derived_support)
     ck_assert_int_eq(facts_transaction_commit(db), 0);
     ck_assert(!facts_get_spo(db, "Alice", "grandparent", "Charlie"));
 
-    delete_datalog_program(db->prog);
     delete_facts(db);
     delete_intern(sym);
 }
@@ -243,10 +246,12 @@ START_TEST(test_eval_retraction_preserves_alternate_derivation)
 {
     s_intern *sym = new_intern(1000);
     s_facts *db = new_facts(sym, 1000);
-    db->prog = new_datalog_program();
-    ck_assert_int_eq(datalog_program_parse_rules(db->prog, "?X <result> yes :- ?X <source_a> yes .\n"
-                                                           "?X <result> yes :- ?X <source_b> yes .\n"),
+    s_datalog_program *prog = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(prog, "?X <result> yes :- ?X <source_a> yes .\n"
+                                                       "?X <result> yes :- ?X <source_b> yes .\n"),
                      0);
+    ck_assert_int_eq(facts_attach_program(db, prog), 0);
+    delete_datalog_program(prog);
     ck_assert_int_eq(facts_transaction_begin(db), 0);
     ck_assert(facts_add_spo(db, "item", "source_a", "yes"));
     ck_assert(facts_add_spo(db, "item", "source_b", "yes"));
@@ -262,7 +267,6 @@ START_TEST(test_eval_retraction_preserves_alternate_derivation)
     ck_assert(facts_remove_spo(db, "item", "source_b", "yes"));
     ck_assert_int_eq(facts_transaction_commit(db), 0);
     ck_assert(!facts_get_spo(db, "item", "result", "yes"));
-    delete_datalog_program(db->prog);
     delete_facts(db);
     delete_intern(sym);
 }
@@ -272,10 +276,12 @@ START_TEST(test_eval_negation_rebuild_preserves_other_rule)
 {
     s_intern *sym = new_intern(1000);
     s_facts *db = new_facts(sym, 1000);
-    db->prog = new_datalog_program();
-    ck_assert_int_eq(datalog_program_parse_rules(db->prog, "?X <can_fly> yes :- ?X <bird> yes, NOT( ?X <penguin> yes ) .\n"
-                                                           "?X <can_fly> yes :- ?X <magic> yes .\n"),
+    s_datalog_program *prog = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(prog, "?X <can_fly> yes :- ?X <bird> yes, NOT( ?X <penguin> yes ) .\n"
+                                                       "?X <can_fly> yes :- ?X <magic> yes .\n"),
                      0);
+    ck_assert_int_eq(facts_attach_program(db, prog), 0);
+    delete_datalog_program(prog);
     ck_assert_int_eq(facts_transaction_begin(db), 0);
     ck_assert(facts_add_spo(db, "Tweety", "bird", "yes"));
     ck_assert(facts_add_spo(db, "Tweety", "magic", "yes"));
@@ -286,7 +292,6 @@ START_TEST(test_eval_negation_rebuild_preserves_other_rule)
     ck_assert(facts_add_spo(db, "Tweety", "penguin", "yes"));
     ck_assert_int_eq(facts_transaction_commit(db), 0);
     ck_assert(facts_get_spo(db, "Tweety", "can_fly", "yes"));
-    delete_datalog_program(db->prog);
     delete_facts(db);
     delete_intern(sym);
 }
@@ -354,6 +359,35 @@ START_TEST(test_program_attachment_owns_copy_and_recomputes)
 }
 END_TEST
 
+static int fail_after_reactive_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count,
+                                        void *user_data)
+{
+    (void)facts;
+    (void)entries;
+    (void)entry_count;
+    (void)user_data;
+    return -1;
+}
+
+START_TEST(test_listener_failure_rolls_back_reactive_closure)
+{
+    s_facts *db = new_facts(NULL, 1000);
+    s_datalog_program *prog = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(prog, "?X <result> yes :- ?X <source> yes .\n"), 0);
+    ck_assert_int_eq(facts_attach_program(db, prog), 0);
+    delete_datalog_program(prog);
+    facts_register_tx_listener(db, fail_after_reactive_listener, NULL);
+
+    ck_assert_int_eq(facts_transaction_begin(db), 0);
+    ck_assert(facts_add_spo(db, "item", "source", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(db), -1);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "source", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(db, "item", "result", "yes"), 0);
+
+    delete_facts(db);
+}
+END_TEST
+
 Suite *eval_suite(void)
 {
     Suite *s;
@@ -372,6 +406,7 @@ Suite *eval_suite(void)
     tcase_add_test(tc_core, test_eval_negation_rebuild_preserves_other_rule);
     tcase_add_test(tc_core, test_eval_is_one_observable_transaction);
     tcase_add_test(tc_core, test_program_attachment_owns_copy_and_recomputes);
+    tcase_add_test(tc_core, test_listener_failure_rolls_back_reactive_closure);
 
     suite_add_tcase(s, tc_core);
     return s;

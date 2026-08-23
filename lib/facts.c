@@ -9,6 +9,7 @@
 #include "io.h"
 #include "lftj.h"
 #include "eval.h"
+#include "facts_internal.h"
 
 int facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact);
 static s_fact *facts_lookup_spo_locked(s_facts *facts, const char *s, const char *p, const char *o);
@@ -69,7 +70,6 @@ void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
     facts->disable_listener = 0;
 
     transaction_init(&facts->tx);
-    facts_register_tx_listener(facts, rete_tx_listener, NULL);
 }
 
 void facts_destroy(s_facts *facts)
@@ -78,6 +78,17 @@ void facts_destroy(s_facts *facts)
         delete_datalog_program(facts->prog);
     facts->prog = NULL;
     facts->owns_prog = 0;
+    if (!facts->symbols_delete) {
+        s_set_cursor cursor;
+        set_cursor_init(&facts->index, &cursor);
+        s_set_item *item;
+        while ((item = set_cursor_next(&cursor)) != NULL) {
+            s_fact *fact = (s_fact *)item->data;
+            intern_unstring(facts->symbols, fact->s);
+            intern_unstring(facts->symbols, fact->p);
+            intern_unstring(facts->symbols, fact->o);
+        }
+    }
     delete_hexastore(facts->hexastore);
     set_destroy(&facts->index);
     if (facts->symbols_delete)
@@ -93,6 +104,12 @@ void facts_reset(s_facts *facts)
     void *commit_observer_data;
     f_facts_commit_summary_observer commit_summary_observer;
     void *commit_summary_observer_data;
+    f_facts_commit_summary_observer internal_commit_summary_observer;
+    void *internal_commit_summary_observer_data;
+    f_facts_tx_listener listener;
+    void *listener_data;
+    f_facts_tx_listener internal_listener;
+    void *internal_listener_data;
     s_set_cursor sc;
     s_set_item *si;
     assert(facts);
@@ -100,7 +117,11 @@ void facts_reset(s_facts *facts)
     // 1. Recycle all facts back into the fact arena pool
     set_cursor_init(&facts->index, &sc);
     while ((si = set_cursor_next(&sc))) {
-        arena_free_fact(si->data);
+        s_fact *fact = (s_fact *)si->data;
+        intern_unstring(facts->symbols, fact->s);
+        intern_unstring(facts->symbols, fact->p);
+        intern_unstring(facts->symbols, fact->o);
+        arena_free_fact(fact);
     }
 
     // 2. Destroy and recreate the hexastore index
@@ -126,11 +147,20 @@ void facts_reset(s_facts *facts)
     commit_observer_data = facts->tx.commit_observer_data;
     commit_summary_observer = facts->tx.commit_summary_observer;
     commit_summary_observer_data = facts->tx.commit_summary_observer_data;
+    internal_commit_summary_observer = facts->tx.internal_commit_summary_observer;
+    internal_commit_summary_observer_data = facts->tx.internal_commit_summary_observer_data;
+    listener = facts->tx.listener;
+    listener_data = facts->tx.listener_data;
+    internal_listener = facts->tx.internal_listener;
+    internal_listener_data = facts->tx.internal_listener_data;
     transaction_destroy(&facts->tx);
     transaction_init(&facts->tx);
-    facts_register_tx_listener(facts, rete_tx_listener, NULL);
+    facts_register_tx_listener(facts, listener, listener_data);
+    facts_register_internal_tx_listener(facts, internal_listener, internal_listener_data);
     facts_register_commit_observer(facts, commit_observer, commit_observer_data);
     facts_register_commit_summary_observer(facts, commit_summary_observer, commit_summary_observer_data);
+    facts_register_internal_commit_summary_observer(facts, internal_commit_summary_observer,
+                                                    internal_commit_summary_observer_data);
 }
 
 s_facts *new_facts(s_intern *symbols, unsigned long max)
@@ -1301,8 +1331,19 @@ void facts_read_end(s_facts_read_guard *guard)
 void facts_register_tx_listener(s_facts *facts, f_facts_tx_listener listener, void *user_data)
 {
     assert(facts);
+    pthread_mutex_lock(&facts->tx.state_mutex);
     facts->tx.listener = listener;
     facts->tx.listener_data = user_data;
+    pthread_mutex_unlock(&facts->tx.state_mutex);
+}
+
+void facts_register_internal_tx_listener(s_facts *facts, f_facts_tx_listener listener, void *user_data)
+{
+    assert(facts);
+    pthread_mutex_lock(&facts->tx.state_mutex);
+    facts->tx.internal_listener = listener;
+    facts->tx.internal_listener_data = user_data;
+    pthread_mutex_unlock(&facts->tx.state_mutex);
 }
 
 void facts_register_commit_observer(s_facts *facts, f_facts_commit_observer observer, void *user_data)
@@ -1331,6 +1372,16 @@ void facts_register_commit_summary_observer(s_facts *facts, f_facts_commit_summa
     pthread_mutex_lock(&facts->tx.state_mutex);
     facts->tx.commit_summary_observer = observer;
     facts->tx.commit_summary_observer_data = user_data;
+    pthread_mutex_unlock(&facts->tx.state_mutex);
+}
+
+void facts_register_internal_commit_summary_observer(s_facts *facts, f_facts_commit_summary_observer observer,
+                                                     void *user_data)
+{
+    assert(facts);
+    pthread_mutex_lock(&facts->tx.state_mutex);
+    facts->tx.internal_commit_summary_observer = observer;
+    facts->tx.internal_commit_summary_observer_data = user_data;
     pthread_mutex_unlock(&facts->tx.state_mutex);
 }
 
@@ -1393,9 +1444,12 @@ int facts_attach_program(s_facts *facts, const s_datalog_program *prog)
     s_datalog_program *old_prog = facts->prog;
     int old_owns_prog = facts->owns_prog;
     int old_disable = facts->disable_listener;
+    f_facts_tx_listener old_internal_listener = facts->tx.internal_listener;
+    void *old_internal_listener_data = facts->tx.internal_listener_data;
     facts->disable_listener = 1;
     facts->prog = copy;
     facts->owns_prog = copy != NULL;
+    facts_register_internal_tx_listener(facts, copy ? rete_tx_listener : NULL, NULL);
 
     int result = facts_remove_all_derived(facts);
     if (result == 0 && copy)
@@ -1405,6 +1459,7 @@ int facts_attach_program(s_facts *facts, const s_datalog_program *prog)
     if (result != 0) {
         facts->prog = old_prog;
         facts->owns_prog = old_owns_prog;
+        facts_register_internal_tx_listener(facts, old_internal_listener, old_internal_listener_data);
         facts_transaction_rollback(facts);
         delete_datalog_program(copy);
         return -1;
@@ -1413,6 +1468,7 @@ int facts_attach_program(s_facts *facts, const s_datalog_program *prog)
     if (transaction_commit_silent(facts, &facts->tx) != 0) {
         facts->prog = old_prog;
         facts->owns_prog = old_owns_prog;
+        facts_register_internal_tx_listener(facts, old_internal_listener, old_internal_listener_data);
         delete_datalog_program(copy);
         return -1;
     }

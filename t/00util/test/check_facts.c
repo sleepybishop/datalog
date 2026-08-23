@@ -29,6 +29,26 @@ START_TEST(test_facts_init_destroy)
 }
 END_TEST
 
+START_TEST(test_shared_symbol_references_are_released)
+{
+    s_intern *symbols = new_intern(100);
+    s_facts *facts = new_facts(symbols, 100);
+    ck_assert(symbols != NULL);
+    ck_assert(facts != NULL);
+
+    ck_assert(facts_add_spo(facts, "shared-subject", "shared-predicate", "shared-object"));
+    ck_assert(intern_find_symbol(symbols, "shared-subject") != NULL);
+    facts_reset(facts);
+    ck_assert(intern_find_symbol(symbols, "shared-subject") == NULL);
+
+    ck_assert(facts_add_spo(facts, "destroy-subject", "destroy-predicate", "destroy-object"));
+    ck_assert(intern_find_symbol(symbols, "destroy-subject") != NULL);
+    delete_facts(facts);
+    ck_assert(intern_find_symbol(symbols, "destroy-subject") == NULL);
+    delete_intern(symbols);
+}
+END_TEST
+
 static void *foreign_commit(void *arg)
 {
     int *result = malloc(sizeof(*result));
@@ -2050,14 +2070,37 @@ END_TEST
 static int g_listener_called = 0;
 static size_t g_listener_entry_count = 0;
 
-static void my_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
+static int my_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
 {
     (void)facts;
     (void)entries;
     int *called = (int *)user_data;
     *called = 1;
     g_listener_entry_count = entry_count;
+    return 0;
 }
+
+static int failing_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
+{
+    (void)entries;
+    (void)entry_count;
+    (void)user_data;
+    /* Prove that listener-side mutations are part of the same rollback unit. */
+    if (!facts_add_spo_origin(facts, "partial", "derived", "result", FACT_ORIGIN_DERIVED))
+        return -1;
+    return -1;
+}
+
+START_TEST(test_failing_tx_listener_rolls_back_base_and_derived_changes)
+{
+    facts_register_tx_listener(g_f, failing_tx_listener, NULL);
+    ck_assert_int_eq(facts_transaction_begin(g_f), 0);
+    ck_assert(facts_add_spo(g_f, "base", "change", "pending"));
+    ck_assert_int_eq(facts_transaction_commit(g_f), -1);
+    ck_assert_int_eq(facts_contains_spo(g_f, "base", "change", "pending"), 0);
+    ck_assert_int_eq(facts_contains_spo(g_f, "partial", "derived", "result"), 0);
+}
+END_TEST
 
 START_TEST(test_facts_support_origin_and_rollback)
 {
@@ -2178,6 +2221,7 @@ Suite *facts_suite(void)
     s = suite_create("Facts");
     tc_init = tcase_create("Init");
     tcase_add_test(tc_init, test_facts_init_destroy);
+    tcase_add_test(tc_init, test_shared_symbol_references_are_released);
     tcase_add_test(tc_init, test_facts_new_delete);
     tcase_add_test(tc_init, test_facts_reset);
     suite_add_tcase(s, tc_init);
@@ -2286,6 +2330,7 @@ Suite *facts_suite(void)
     tcase_add_test(tc_prop, test_facts_support_origin_and_rollback);
     tcase_add_test(tc_prop, test_facts_log_tracks_asserted_support_only);
     tcase_add_test(tc_prop, test_facts_tx_listener_and_entity_builder);
+    tcase_add_test(tc_prop, test_failing_tx_listener_rolls_back_base_and_derived_changes);
     suite_add_tcase(s, tc_prop);
     return s;
 }

@@ -22,7 +22,8 @@ typedef struct rollback_stack {
     size_t size;
 } s_rollback_stack;
 
-typedef void (*f_facts_tx_listener)(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data);
+/* Return nonzero to abort and roll back the outer transaction. */
+typedef int (*f_facts_tx_listener)(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data);
 typedef void (*f_facts_commit_observer)(s_facts *facts, void *user_data);
 
 #define FACTS_COMMIT_PARTITIONS 64
@@ -41,10 +42,14 @@ typedef struct transaction {
     int owner_valid;
     f_facts_tx_listener listener;
     void *listener_data;
+    f_facts_tx_listener internal_listener;
+    void *internal_listener_data;
     f_facts_commit_observer commit_observer;
     void *commit_observer_data;
     f_facts_commit_summary_observer commit_summary_observer;
     void *commit_summary_observer_data;
+    f_facts_commit_summary_observer internal_commit_summary_observer;
+    void *internal_commit_summary_observer_data;
     urcu_t rcu;
 } s_transaction;
 

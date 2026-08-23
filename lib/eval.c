@@ -746,14 +746,14 @@ int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog
     return (int)total_derived;
 }
 
-void rete_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
+int rete_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
 {
     (void)user_data;
     if (facts->disable_listener) {
-        return;
+        return 0;
     }
     if (!facts->prog) {
-        return;
+        return 0;
     }
 
     facts->disable_listener = 1;
@@ -781,16 +781,33 @@ void rete_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t en
         facts_with_0(facts, &cursor, NULL, NULL, NULL);
         s_fact *fact;
         while ((fact = facts_cursor_next(&cursor)) != NULL) {
-            if (fact->derived_count)
-                derived = fact_list_intern(derived, fact);
+            if (fact->derived_count) {
+                s_fact_list *next = fact_list_intern(derived, fact);
+                if (!next) {
+                    facts_cursor_stop(&cursor);
+                    delete_fact_list(derived);
+                    facts->disable_listener = 0;
+                    return -1;
+                }
+                derived = next;
+            }
         }
         facts_cursor_stop(&cursor);
-        for (s_fact_list *item = derived; item; item = item->next)
-            facts_remove_fact_origin(facts, item->fact, FACT_ORIGIN_DERIVED);
+        int result = 0;
+        for (s_fact_list *item = derived; item; item = item->next) {
+            if (facts_remove_fact_origin(facts, item->fact, FACT_ORIGIN_DERIVED) < 0) {
+                result = -1;
+                break;
+            }
+        }
         delete_fact_list(derived);
-        facts_datalog_eval(facts, facts->prog);
+        if (result == 0 && facts_datalog_eval(facts, facts->prog) < 0)
+            result = -1;
+        facts->disable_listener = 0;
+        return result;
     } else {
-        facts_datalog_eval_incremental(facts, facts->prog, entries, entry_count);
+        int result = facts_datalog_eval_incremental(facts, facts->prog, entries, entry_count);
+        facts->disable_listener = 0;
+        return result < 0 ? -1 : 0;
     }
-    facts->disable_listener = 0;
 }
