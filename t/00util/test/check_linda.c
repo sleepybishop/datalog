@@ -227,10 +227,28 @@ START_TEST(test_linda_close_rejects_new_work)
     ck_assert(space != NULL);
     ck_assert_int_eq(linda_space_is_closed(space), 0);
     ck_assert_int_eq(linda_space_close(space), LINDA_OK);
+    ck_assert_ptr_eq(linda_space_facts(space), NULL);
     ck_assert_int_eq(linda_out(space, "closed", "space", "tuple"), LINDA_CLOSED);
     ck_assert_int_eq(linda_rdp(space, "?S", "?P", "?O", NULL, 0, NULL, 0, NULL, 0), LINDA_CLOSED);
     ck_assert_int_eq(linda_inp(space, "?S", "?P", "?O", NULL, 0, NULL, 0, NULL, 0), LINDA_CLOSED);
     ck_assert_int_eq(linda_eval(space, eval_worker, space), LINDA_CLOSED);
+    delete_linda_space(space);
+}
+END_TEST
+
+START_TEST(test_linda_guarded_fact_read_access)
+{
+    s_linda_space *space = new_linda_space(1000);
+    ck_assert(space != NULL);
+    ck_assert_int_eq(linda_out(space, "guarded", "read", "value"), LINDA_OK);
+    s_linda_facts_guard guard;
+    const s_facts *facts = NULL;
+    ck_assert_int_eq(linda_space_facts_read_begin(space, &guard, &facts), LINDA_OK);
+    ck_assert(facts != NULL);
+    ck_assert_int_eq(facts_contains_spo((s_facts *)facts, "guarded", "read", "value"), 1);
+    linda_space_facts_read_end(&guard);
+    ck_assert_int_eq(linda_space_close(space), LINDA_OK);
+    ck_assert_int_eq(linda_space_facts_read_begin(space, &guard, &facts), LINDA_CLOSED);
     delete_linda_space(space);
 }
 END_TEST
@@ -458,6 +476,7 @@ Suite *linda_suite(void)
     tcase_add_test(tc_core, test_linda_timed_operations);
     tcase_add_test(tc_core, test_linda_close_cancels_blocked_operations);
     tcase_add_test(tc_core, test_linda_close_rejects_new_work);
+    tcase_add_test(tc_core, test_linda_guarded_fact_read_access);
     tcase_add_test(tc_core, test_linda_reusable_pattern);
     tcase_add_test(tc_core, test_linda_wakes_after_direct_database_commit);
     tcase_add_test(tc_core, test_linda_notification_survives_public_observer_registration);

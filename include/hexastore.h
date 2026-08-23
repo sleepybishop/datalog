@@ -15,7 +15,7 @@ typedef struct hexastore {
 
 s_hexastore *new_hexastore(void);
 void delete_hexastore(s_hexastore *h);
-void hexastore_insert(s_hexastore *h, struct fact *f);
+int hexastore_insert(s_hexastore *h, struct fact *f);
 void hexastore_remove(s_hexastore *h, struct fact *f);
 void hexastore_compact(s_hexastore *h);
 

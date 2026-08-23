@@ -54,6 +54,7 @@ typedef struct transaction {
 } s_transaction;
 
 void transaction_init(s_transaction *tx);
+int transaction_init_checked(s_transaction *tx);
 void transaction_destroy(s_transaction *tx);
 
 int transaction_begin(s_facts *facts, s_transaction *tx);

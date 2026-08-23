@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 #include "intern.h"
 #include "rax.h"
 
@@ -14,8 +16,11 @@ static s_intern_page *new_page(size_t min_capacity)
     if (min_capacity > page_capacity) {
         page_capacity = min_capacity;
     }
+    if (page_capacity > SIZE_MAX - sizeof(s_intern_page))
+        return NULL;
     s_intern_page *page = malloc(sizeof(s_intern_page) + page_capacity);
-    assert(page);
+    if (!page)
+        return NULL;
     page->next = NULL;
     page->size = 0;
     page->capacity = page_capacity;
@@ -24,10 +29,14 @@ static s_intern_page *new_page(size_t min_capacity)
 
 static void *intern_alloc(s_intern *intern, size_t size)
 {
+    if (size > SIZE_MAX - 7)
+        return NULL;
     size = ALIGN_UP(size, 8);
     s_intern_page *page = intern->pages;
     if (!page || page->size + size > page->capacity) {
         page = new_page(size);
+        if (!page)
+            return NULL;
         page->next = intern->pages;
         intern->pages = page;
     }
@@ -38,13 +47,24 @@ static void *intern_alloc(s_intern *intern, size_t size)
 
 void intern_init(s_intern *intern, unsigned long max)
 {
+    int result = intern_init_checked(intern, max);
+    assert(result == 0);
+    (void)result;
+}
+
+int intern_init_checked(s_intern *intern, unsigned long max)
+{
     (void)max;
-    assert(intern);
+    if (!intern)
+        return -1;
+    memset(intern, 0, sizeof(*intern));
     intern->symbols = raxNew();
-    assert(intern->symbols);
+    if (!intern->symbols)
+        return -1;
     intern->symbols_delete = 1;
     intern->next_id = 1;
     intern->pages = NULL;
+    return 0;
 }
 
 void intern_destroy(s_intern *intern)
@@ -73,8 +93,9 @@ void intern_destroy(s_intern *intern)
 s_intern *new_intern(unsigned long max)
 {
     s_intern *intern = malloc(sizeof(s_intern));
-    if (intern) {
-        intern_init(intern, max);
+    if (intern && intern_init_checked(intern, max) != 0) {
+        free(intern);
+        intern = NULL;
     }
     return intern;
 }
@@ -114,14 +135,18 @@ Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
     int found = raxFind(intern->symbols, (unsigned char *)string, len, &res);
     s_set_item *i;
     if (!found) {
+        if (len > SIZE_MAX - sizeof(s_symbol) - 1 || intern->next_id == UINT64_MAX)
+            return NULL;
         s_symbol *sym = intern_alloc(intern, sizeof(s_symbol) + len + 1);
-        assert(sym);
+        if (!sym)
+            return NULL;
         sym->id = intern->next_id++;
         memcpy(sym->data, string, len);
         sym->data[len] = '\0';
 
         i = malloc(sizeof(s_set_item));
-        assert(i);
+        if (!i)
+            return NULL;
         i->data = (void *)sym;
         i->len = len;
         i->hash = 0;
@@ -132,12 +157,15 @@ Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
         i->double_value = 0.0;
 
         int ret = raxInsert(intern->symbols, (unsigned char *)string, len, i, NULL);
-        (void)ret;
-        assert(ret == 1);
+        if (ret != 1) {
+            free(i);
+            return NULL;
+        }
     } else {
         i = (s_set_item *)res;
     }
-    assert(i);
+    if (!i || i->usage == ULONG_MAX)
+        return NULL;
     i->usage++;
     return (Symbol)i->data;
 }

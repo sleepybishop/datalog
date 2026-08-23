@@ -19,8 +19,10 @@
 
 #include <pthread.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #define URCU_MAX_THREADS 64
@@ -70,6 +72,7 @@ extern "C" {
 
 /* Initialize the RCU context */
 void urcu_init(urcu_t *rcu, int initial_capacity);
+int urcu_init_checked(urcu_t *rcu, int initial_capacity);
 
 /* Destroy the RCU context, freeing all remaining retired pointers */
 void urcu_destroy(urcu_t *rcu);
@@ -80,13 +83,13 @@ int urcu_register_thread(urcu_t *rcu);
 /* Unregister the calling thread from RCU registry */
 void urcu_unregister_thread(urcu_t *rcu);
 
-/* Enter an RCU read-side critical section (lock-free) */
-static inline void urcu_read_lock(urcu_t *rcu)
+/* Enter an RCU read-side critical section (lock-free). */
+static inline int urcu_read_lock_checked(urcu_t *rcu)
 {
     urcu_registration_t *registration = pthread_getspecific(rcu->registration_key);
     if (!registration) {
         if (urcu_register_thread(rcu) < 0)
-            return;
+            return -1;
         registration = pthread_getspecific(rcu->registration_key);
     }
     if (registration && registration->depth++ == 0) {
@@ -95,6 +98,13 @@ static inline void urcu_read_lock(urcu_t *rcu)
         __atomic_store_n(&rcu->readers[idx].epoch, g_epoch, __ATOMIC_RELEASE);
         __atomic_store_n(&rcu->readers[idx].active, true, __ATOMIC_RELEASE);
     }
+    return 0;
+}
+
+static inline void urcu_read_lock(urcu_t *rcu)
+{
+    if (urcu_read_lock_checked(rcu) != 0)
+        abort();
 }
 
 /* Exit an RCU read-side critical section (lock-free) */
@@ -108,6 +118,7 @@ static inline void urcu_read_unlock(urcu_t *rcu)
 
 /* Defer reclamation of a memory pointer until all current readers exit */
 void urcu_retire(urcu_t *rcu, void *ptr, void (*free_fn)(void *));
+int urcu_retire_checked(urcu_t *rcu, void *ptr, void (*free_fn)(void *));
 
 /* Reclaim retired objects that are no longer accessed by any active reader */
 void urcu_gc(urcu_t *rcu);
@@ -138,20 +149,42 @@ static void urcu_registration_destroy(void *ptr)
 
 void urcu_init(urcu_t *rcu, int initial_capacity)
 {
+    int result = urcu_init_checked(rcu, initial_capacity);
+    if (result != 0)
+        abort();
+}
+
+int urcu_init_checked(urcu_t *rcu, int initial_capacity)
+{
+    if (!rcu || initial_capacity < 0 ||
+        (size_t)initial_capacity > SIZE_MAX / sizeof(urcu_retired_t))
+        return -1;
+    memset(rcu, 0, sizeof(*rcu));
     rcu->global_epoch = 1;
     for (int i = 0; i < URCU_MAX_THREADS; i++) {
         rcu->readers[i].epoch = 0;
         rcu->readers[i].active = false;
     }
-    pthread_mutex_init(&rcu->registry_mutex, NULL);
-    pthread_key_create(&rcu->registration_key, urcu_registration_destroy);
+    if (pthread_mutex_init(&rcu->registry_mutex, NULL) != 0)
+        return -1;
+    if (pthread_key_create(&rcu->registration_key, urcu_registration_destroy) != 0) {
+        pthread_mutex_destroy(&rcu->registry_mutex);
+        return -1;
+    }
     rcu->retired_count = 0;
-    rcu->retired_capacity = initial_capacity;
+    rcu->retired_capacity = 0;
     if (initial_capacity > 0) {
         rcu->retired_queue = (urcu_retired_t *)malloc(initial_capacity * sizeof(urcu_retired_t));
+        if (!rcu->retired_queue) {
+            pthread_key_delete(rcu->registration_key);
+            pthread_mutex_destroy(&rcu->registry_mutex);
+            return -1;
+        }
+        rcu->retired_capacity = initial_capacity;
     } else {
         rcu->retired_queue = NULL;
     }
+    return 0;
 }
 
 void urcu_destroy(urcu_t *rcu)
@@ -222,24 +255,23 @@ void urcu_unregister_thread(urcu_t *rcu)
     }
 }
 
-void urcu_retire(urcu_t *rcu, void *ptr, void (*free_fn)(void *))
+int urcu_retire_checked(urcu_t *rcu, void *ptr, void (*free_fn)(void *))
 {
-    if (!ptr) {
-        return;
-    }
+    if (!rcu)
+        return -1;
+    if (!ptr)
+        return 0;
     uint64_t current = __atomic_load_n(&rcu->global_epoch, __ATOMIC_ACQUIRE);
 
     if (rcu->retired_count >= rcu->retired_capacity) {
+        if (rcu->retired_capacity > INT_MAX / 2)
+            return -1;
         int new_cap = rcu->retired_capacity == 0 ? 64 : rcu->retired_capacity * 2;
+        if ((size_t)new_cap > SIZE_MAX / sizeof(urcu_retired_t))
+            return -1;
         urcu_retired_t *new_queue = (urcu_retired_t *)realloc(rcu->retired_queue, new_cap * sizeof(urcu_retired_t));
-        if (!new_queue) {
-            if (free_fn) {
-                free_fn(ptr);
-            } else {
-                free(ptr);
-            }
-            return;
-        }
+        if (!new_queue)
+            return -1;
         rcu->retired_queue = new_queue;
         rcu->retired_capacity = new_cap;
     }
@@ -247,6 +279,20 @@ void urcu_retire(urcu_t *rcu, void *ptr, void (*free_fn)(void *))
     rcu->retired_queue[rcu->retired_count++] = (urcu_retired_t){.ptr = ptr, .free_fn = free_fn, .epoch = current};
 
     __atomic_add_fetch(&rcu->global_epoch, 1, __ATOMIC_ACQ_REL);
+    return 0;
+}
+
+void urcu_retire(urcu_t *rcu, void *ptr, void (*free_fn)(void *))
+{
+    if (urcu_retire_checked(rcu, ptr, free_fn) == 0 || !ptr)
+        return;
+
+    /* Preserve safety when the legacy void API cannot grow the queue. */
+    urcu_synchronize(rcu);
+    if (free_fn)
+        free_fn(ptr);
+    else
+        free(ptr);
 }
 
 void urcu_gc(urcu_t *rcu)

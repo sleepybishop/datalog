@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "spec.h"
@@ -34,9 +35,13 @@ p_spec spec_expand(p_spec spec)
     assert(spec);
     count = spec_count_facts(spec);
     if (count > 0) {
+        if (count > (SIZE_MAX - 2) / 4 || count * 4 + 2 > SIZE_MAX / sizeof(const char *))
+            return NULL;
         s_spec_cursor c;
         s_spec_fact f;
         p_spec new = calloc(count * 4 + 2, sizeof(const char *));
+        if (!new)
+            return NULL;
         p_spec n = new;
         spec_cursor_init(&c, spec);
         while (spec_cursor_next(&c, &f)) {
@@ -179,8 +184,13 @@ s_binding *spec_bindings(p_spec spec)
     if (!spec || !spec[0])
         return NULL;
     count = spec_count_bindings(spec);
+    if (count == SIZE_MAX || count + 1 > SIZE_MAX / sizeof(s_binding) ||
+        count > SIZE_MAX / sizeof(char *))
+        return NULL;
     bindings_size = (count + 1) * sizeof(s_binding);
     vars_size = count * sizeof(char *);
+    if (bindings_size > SIZE_MAX - vars_size)
+        return NULL;
     bindings = calloc(bindings_size + vars_size, 1);
     if (!bindings)
         return NULL;

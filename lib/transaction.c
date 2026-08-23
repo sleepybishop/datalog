@@ -8,13 +8,26 @@
 
 void transaction_init(s_transaction *tx)
 {
-    assert(tx);
+    int result = transaction_init_checked(tx);
+    assert(result == 0);
+    (void)result;
+}
+
+int transaction_init_checked(s_transaction *tx)
+{
+    if (!tx)
+        return -1;
+    memset(tx, 0, sizeof(*tx));
     tx->level = 0;
     tx->rollback.entries = NULL;
     tx->rollback.capacity = 0;
     tx->rollback.size = 0;
-    pthread_rwlock_init(&tx->rwlock, NULL);
-    pthread_mutex_init(&tx->state_mutex, NULL);
+    if (pthread_rwlock_init(&tx->rwlock, NULL) != 0)
+        return -1;
+    if (pthread_mutex_init(&tx->state_mutex, NULL) != 0) {
+        pthread_rwlock_destroy(&tx->rwlock);
+        return -1;
+    }
     memset(&tx->owner, 0, sizeof(pthread_t));
     tx->owner_valid = 0;
     tx->listener = NULL;
@@ -27,7 +40,12 @@ void transaction_init(s_transaction *tx)
     tx->commit_summary_observer_data = NULL;
     tx->internal_commit_summary_observer = NULL;
     tx->internal_commit_summary_observer_data = NULL;
-    urcu_init(&tx->rcu, 256);
+    if (urcu_init_checked(&tx->rcu, 256) != 0) {
+        pthread_mutex_destroy(&tx->state_mutex);
+        pthread_rwlock_destroy(&tx->rwlock);
+        return -1;
+    }
+    return 0;
 }
 
 void transaction_destroy(s_transaction *tx)
@@ -203,12 +221,21 @@ int transaction_rollback_push(s_facts *facts, s_transaction *tx, e_rollback_acti
             tx->rollback.entries = entries;
             tx->rollback.capacity = capacity;
         }
+        Symbol s_ref = facts_intern(facts, symbol_to_str(fact->s));
+        Symbol p_ref = facts_intern(facts, symbol_to_str(fact->p));
+        Symbol o_ref = facts_intern(facts, symbol_to_str(fact->o));
+        if (!s_ref || !p_ref || !o_ref) {
+            if (s_ref)
+                facts_unintern(facts, s_ref);
+            if (p_ref)
+                facts_unintern(facts, p_ref);
+            if (o_ref)
+                facts_unintern(facts, o_ref);
+            return -1;
+        }
         s_rollback_entry *entry = &tx->rollback.entries[tx->rollback.size++];
         entry->action = action;
         entry->fact = *fact;
-        facts_intern(facts, symbol_to_str(fact->s));
-        facts_intern(facts, symbol_to_str(fact->p));
-        facts_intern(facts, symbol_to_str(fact->o));
     }
     return 0;
 }

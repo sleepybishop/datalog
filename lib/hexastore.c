@@ -66,21 +66,33 @@ void delete_hexastore(s_hexastore *h)
     }
 }
 
-void hexastore_insert(s_hexastore *h, s_fact *f)
+int hexastore_insert(s_hexastore *h, s_fact *f)
 {
     unsigned char key[24];
 
     // SPO key
     encode_triple_key(key, f->s, f->p, f->o);
-    raxInsert(h->trie_spo, key, 24, f, NULL);
+    if (raxInsert(h->trie_spo, key, 24, f, NULL) != 1)
+        return -1;
 
     // POS key
     encode_triple_key(key, f->p, f->o, f->s);
-    raxInsert(h->trie_pos, key, 24, f, NULL);
+    if (raxInsert(h->trie_pos, key, 24, f, NULL) != 1) {
+        encode_triple_key(key, f->s, f->p, f->o);
+        raxRemove(h->trie_spo, key, 24, NULL);
+        return -1;
+    }
 
     // OSP key
     encode_triple_key(key, f->o, f->s, f->p);
-    raxInsert(h->trie_osp, key, 24, f, NULL);
+    if (raxInsert(h->trie_osp, key, 24, f, NULL) != 1) {
+        encode_triple_key(key, f->p, f->o, f->s);
+        raxRemove(h->trie_pos, key, 24, NULL);
+        encode_triple_key(key, f->s, f->p, f->o);
+        raxRemove(h->trie_spo, key, 24, NULL);
+        return -1;
+    }
+    return 0;
 }
 
 void hexastore_remove(s_hexastore *h, s_fact *f)

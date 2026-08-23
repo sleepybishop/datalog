@@ -422,6 +422,11 @@ static s_rule_token next_rule_token(const char **p)
     return t;
 }
 
+static int rule_token_is_term(const s_rule_token *tokens, size_t count, size_t pos)
+{
+    return pos < count && (tokens[pos].type == RULE_TOK_VAR || tokens[pos].type == RULE_TOK_CONST);
+}
+
 int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
 {
     if (!prog || !rules_str)
@@ -440,8 +445,15 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
     while (1) {
         tok = next_rule_token(&p);
         if (count >= capacity) {
-            capacity *= 2;
-            s_rule_token *new_tokens = realloc(tokens, capacity * sizeof(s_rule_token));
+            if (capacity > SIZE_MAX / 2 || capacity * 2 > SIZE_MAX / sizeof(s_rule_token)) {
+                free(tok.value);
+                for (size_t i = 0; i < count; i++)
+                    free(tokens[i].value);
+                free(tokens);
+                return -1;
+            }
+            size_t new_capacity = capacity * 2;
+            s_rule_token *new_tokens = realloc(tokens, new_capacity * sizeof(s_rule_token));
             if (!new_tokens) {
                 free(tok.value);
                 for (size_t i = 0; i < count; i++)
@@ -450,6 +462,7 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
                 return -1;
             }
             tokens = new_tokens;
+            capacity = new_capacity;
         }
         tokens[count++] = tok;
         if (tok.type == RULE_TOK_EOF)
@@ -465,19 +478,19 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
     }
 
     size_t pos = 0;
-    while (tokens[pos].type != RULE_TOK_EOF) {
+    while (pos < count && tokens[pos].type != RULE_TOK_EOF) {
         /* Expect head: term term term */
-        if (tokens[pos].type != RULE_TOK_VAR && tokens[pos].type != RULE_TOK_CONST)
+        if (!rule_token_is_term(tokens, count, pos))
             goto parse_error;
         const char *head_s = tokens[pos].value;
         pos++;
 
-        if (tokens[pos].type != RULE_TOK_VAR && tokens[pos].type != RULE_TOK_CONST)
+        if (!rule_token_is_term(tokens, count, pos))
             goto parse_error;
         const char *head_p = tokens[pos].value;
         pos++;
 
-        if (tokens[pos].type != RULE_TOK_VAR && tokens[pos].type != RULE_TOK_CONST)
+        if (!rule_token_is_term(tokens, count, pos))
             goto parse_error;
         const char *head_o = tokens[pos].value;
         pos++;
@@ -485,7 +498,7 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
         s_spec_fact head = {head_s, head_p, head_o, NULL};
 
         /* Expect ':-' */
-        if (tokens[pos].type != RULE_TOK_TURNSTILE)
+        if (pos >= count || tokens[pos].type != RULE_TOK_TURNSTILE)
             goto parse_error;
         pos++;
 
@@ -498,30 +511,30 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
 
         while (1) {
             int is_negated = 0;
-            if (tokens[pos].type == RULE_TOK_NOT) {
+            if (pos < count && tokens[pos].type == RULE_TOK_NOT) {
                 is_negated = 1;
                 pos++;
-                if (tokens[pos].type == RULE_TOK_LPAREN) {
+                if (pos < count && tokens[pos].type == RULE_TOK_LPAREN) {
                     pos++;
                 }
             }
 
             /* Expect subgoal terms: term term term */
-            if (tokens[pos].type != RULE_TOK_VAR && tokens[pos].type != RULE_TOK_CONST) {
+            if (!rule_token_is_term(tokens, count, pos)) {
                 free(body);
                 goto parse_error;
             }
             const char *sub_s = tokens[pos].value;
             pos++;
 
-            if (tokens[pos].type != RULE_TOK_VAR && tokens[pos].type != RULE_TOK_CONST) {
+            if (!rule_token_is_term(tokens, count, pos)) {
                 free(body);
                 goto parse_error;
             }
             const char *sub_p = tokens[pos].value;
             pos++;
 
-            if (tokens[pos].type != RULE_TOK_VAR && tokens[pos].type != RULE_TOK_CONST) {
+            if (!rule_token_is_term(tokens, count, pos)) {
                 free(body);
                 goto parse_error;
             }
@@ -530,7 +543,7 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
 
             if (is_negated) {
                 if (pos > 4 && tokens[pos - 4].type == RULE_TOK_LPAREN) {
-                    if (tokens[pos].type != RULE_TOK_RPAREN) {
+                    if (pos >= count || tokens[pos].type != RULE_TOK_RPAREN) {
                         free(body);
                         goto parse_error;
                     }
@@ -550,10 +563,10 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
             body[body_count++] = (s_spec_fact){sub_s, sub_p, sub_o, is_negated ? ":not" : NULL};
 
             /* Expect either ',' or '.' */
-            if (tokens[pos].type == RULE_TOK_COMMA) {
+            if (pos < count && tokens[pos].type == RULE_TOK_COMMA) {
                 pos++;
                 continue;
-            } else if (tokens[pos].type == RULE_TOK_DOT) {
+            } else if (pos < count && tokens[pos].type == RULE_TOK_DOT) {
                 pos++;
                 break;
             } else {
@@ -575,6 +588,9 @@ int datalog_program_parse_rules(s_datalog_program *prog, const char *rules_str)
         }
         free(body);
     }
+
+    if (pos >= count)
+        goto parse_error;
 
     for (size_t i = 0; i < count; i++) {
         if (tokens[i].value)

@@ -55,6 +55,7 @@ typedef struct intern_table {
 } s_intern;
 
 void intern_init(s_intern *intern, unsigned long max);
+int intern_init_checked(s_intern *intern, unsigned long max);
 void intern_destroy(s_intern *intern);
 
 s_intern *new_intern(unsigned long max);

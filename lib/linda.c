@@ -99,6 +99,16 @@ static s_linda_entry *linda_entry_add(s_linda_space *space, const s_fact *fact, 
     entry->p = facts_intern(space->db, symbol_to_str(fact->p));
     entry->o = facts_intern(space->db, symbol_to_str(fact->o));
     entry->count = count;
+    if (!entry->s || !entry->p || !entry->o) {
+        if (entry->s)
+            facts_unintern(space->db, entry->s);
+        if (entry->p)
+            facts_unintern(space->db, entry->p);
+        if (entry->o)
+            facts_unintern(space->db, entry->o);
+        free(entry);
+        return NULL;
+    }
     if (!set_add(&space->multiplicity, entry, LINDA_ENTRY_KEY_SIZE)) {
         facts_unintern(space->db, entry->s);
         facts_unintern(space->db, entry->p);
@@ -296,7 +306,37 @@ s_linda_space *new_linda_space(unsigned long max_symbols)
 
 s_facts *linda_space_facts(s_linda_space *space)
 {
-    return space ? space->db : NULL;
+    return space && !linda_closed(space) ? space->db : NULL;
+}
+
+int linda_space_facts_read_begin(s_linda_space *space, s_linda_facts_guard *guard, const s_facts **facts_out)
+{
+    if (!space || !guard || !facts_out)
+        return LINDA_ERROR;
+    memset(guard, 0, sizeof(*guard));
+    *facts_out = NULL;
+    int result = linda_operation_begin(space);
+    if (result != LINDA_OK)
+        return result;
+    if (facts_read_begin(space->db, &guard->facts_guard) != 0) {
+        linda_operation_end(space);
+        return LINDA_ERROR;
+    }
+    guard->space = space;
+    guard->active = 1;
+    *facts_out = space->db;
+    return LINDA_OK;
+}
+
+void linda_space_facts_read_end(s_linda_facts_guard *guard)
+{
+    if (!guard || !guard->active)
+        return;
+    s_linda_space *space = guard->space;
+    facts_read_end(&guard->facts_guard);
+    guard->space = NULL;
+    guard->active = 0;
+    linda_operation_end(space);
 }
 
 int linda_space_attach_program(s_linda_space *space, const s_datalog_program *program)
@@ -449,7 +489,8 @@ static int match_and_extract(s_linda_space *space, const s_linda_pattern *patter
     bindings[pattern->variable_count].value = NULL;
     const char *spec[5] = {pattern->terms[0], pattern->terms[1], pattern->terms[2], NULL, NULL};
     s_facts_with_cursor cursor;
-    facts_with(space->db, bindings, &cursor, spec);
+    if (facts_with_checked(space->db, bindings, &cursor, spec) != 0)
+        return -1;
     int found = 0;
     const char *matched[3] = {NULL, NULL, NULL};
     while (facts_with_cursor_next(&cursor)) {
@@ -489,7 +530,7 @@ static int match_and_extract(s_linda_space *space, const s_linda_pattern *patter
             *match_o = matched[2];
     }
     facts_with_cursor_destroy(&cursor);
-    return found;
+    return facts_with_cursor_error(&cursor) ? -1 : found;
 }
 
 static int linda_consume_one(s_linda_space *space, const char *s, const char *p, const char *o)

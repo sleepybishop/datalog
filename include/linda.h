@@ -15,6 +15,11 @@
 
 typedef struct linda_pattern s_linda_pattern;
 typedef struct linda_space s_linda_space;
+typedef struct linda_facts_guard {
+    s_linda_space *space;
+    s_facts_read_guard facts_guard;
+    int active;
+} s_linda_facts_guard;
 
 /* Allocate and initialize a new Linda Tuplespace */
 s_linda_space *new_linda_space(unsigned long max_symbols);
@@ -31,10 +36,16 @@ int linda_space_is_closed(s_linda_space *space);
 void delete_linda_space(s_linda_space *space);
 
 /*
- * Advanced interoperability escape hatch. The returned database is borrowed
- * and remains owned by space. Prefer Linda operations for coordination tuples.
+ * Legacy interoperability escape hatch. The returned database is borrowed,
+ * becomes unavailable after close, and is unsafe to retain across deletion.
+ * Prefer linda_space_facts_read_begin() for reads and Linda operations for
+ * coordination mutations.
  */
 s_facts *linda_space_facts(s_linda_space *space);
+
+/* Lifecycle-safe read access. End every successful guard before deletion. */
+int linda_space_facts_read_begin(s_linda_space *space, s_linda_facts_guard *guard, const s_facts **facts_out);
+void linda_space_facts_read_end(s_linda_facts_guard *guard);
 
 /* Attach or detach a managed reactive program on the shared fact runtime. */
 int linda_space_attach_program(s_linda_space *space, const s_datalog_program *program);

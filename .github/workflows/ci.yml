@@ -30,6 +30,19 @@ jobs:
       - name: ASan and UBSan
         run: make -B check CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
 
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linda concurrency under TSan
+        run: |
+          make -B t/00util/test/check_linda CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
+          ./t/00util/test/check_linda
+
   analyzer:
     runs-on: ubuntu-latest
 
