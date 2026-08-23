@@ -36,6 +36,14 @@ START_TEST(test_sparql_parse_error)
 }
 END_TEST
 
+START_TEST(test_sparql_insert_is_atomic)
+{
+    int rc = facts_sparql_insert(g_f, "INSERT DATA { <atomic-s> <atomic-p> <atomic-o> . <incomplete> }");
+    ck_assert_int_eq(-1, rc);
+    ck_assert(facts_get_spo(g_f, "atomic-s", "atomic-p", "atomic-o") == NULL);
+}
+END_TEST
+
 START_TEST(test_sparql_single_triple)
 {
     s_facts_with_cursor c;
@@ -380,6 +388,7 @@ Suite *sparql_suite(void)
     tc_core = tcase_create("Core");
     tcase_add_checked_fixture(tc_core, setup, teardown);
     tcase_add_test(tc_core, test_sparql_parse_error);
+    tcase_add_test(tc_core, test_sparql_insert_is_atomic);
     tcase_add_test(tc_core, test_sparql_single_triple);
     tcase_add_test(tc_core, test_sparql_multiple_triples);
     tcase_add_test(tc_core, test_sparql_negation);

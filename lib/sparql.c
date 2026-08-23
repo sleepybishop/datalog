@@ -124,6 +124,10 @@ static s_token next_token(const char **p)
         size_t len = *p - start;
         t.type = TOKEN_VAR;
         t.value = malloc(len + 1);
+        if (!t.value) {
+            t.type = TOKEN_ERROR;
+            return t;
+        }
         memcpy(t.value, start, len);
         t.value[len] = '\0';
         return t;
@@ -139,6 +143,10 @@ static s_token next_token(const char **p)
             size_t len = *p - start;
             t.type = TOKEN_CONST;
             t.value = malloc(len + 1);
+            if (!t.value) {
+                t.type = TOKEN_ERROR;
+                return t;
+            }
             memcpy(t.value, start, len);
             t.value[len] = '\0';
             (*p)++;
@@ -159,6 +167,10 @@ static s_token next_token(const char **p)
             size_t len = *p - start;
             t.type = TOKEN_CONST;
             t.value = malloc(len + 1);
+            if (!t.value) {
+                t.type = TOKEN_ERROR;
+                return t;
+            }
             memcpy(t.value, start, len);
             t.value[len] = '\0';
             (*p)++;
@@ -177,6 +189,10 @@ static s_token next_token(const char **p)
     size_t len = *p - start;
     if (len > 0) {
         char *word = malloc(len + 1);
+        if (!word) {
+            t.type = TOKEN_ERROR;
+            return t;
+        }
         memcpy(word, start, len);
         word[len] = '\0';
 
@@ -234,7 +250,17 @@ static s_token_stream tokenize(const char *query)
     const char *p = query;
     while (1) {
         s_token t = next_token(&p);
-        stream.tokens = realloc(stream.tokens, (stream.count + 1) * sizeof(s_token));
+        s_token *new_tokens = realloc(stream.tokens, (stream.count + 1) * sizeof(s_token));
+        if (!new_tokens) {
+            free(t.value);
+            for (size_t i = 0; i < stream.count; i++)
+                free(stream.tokens[i].value);
+            free(stream.tokens);
+            stream.tokens = NULL;
+            stream.count = 0;
+            return stream;
+        }
+        stream.tokens = new_tokens;
         stream.tokens[stream.count++] = t;
         if (t.type == TOKEN_EOF || t.type == TOKEN_ERROR) {
             break;
@@ -266,6 +292,8 @@ static char *resolve_prefix_list(s_sparql_prefix *prefixes, size_t prefix_count,
     if (colon) {
         size_t prefix_len = colon - val;
         char *prefix_name = strndup(val, prefix_len);
+        if (!prefix_name)
+            return NULL;
 
         const char *uri = NULL;
         for (size_t i = 0; i < prefix_count; i++) {
@@ -327,6 +355,8 @@ static s_sparql_query *parse_query(s_facts *facts, s_token_stream *stream)
             goto error;
         }
         char *prefix_name = strndup(pref_token, pref_len - 1);
+        if (!prefix_name)
+            goto error;
         stream->pos++;
 
         if (stream->tokens[stream->pos].type != TOKEN_CONST) {
@@ -334,9 +364,19 @@ static s_sparql_query *parse_query(s_facts *facts, s_token_stream *stream)
             goto error;
         }
         char *prefix_uri = strdup(stream->tokens[stream->pos].value);
+        if (!prefix_uri) {
+            free(prefix_name);
+            goto error;
+        }
         stream->pos++;
 
-        q->prefixes = realloc(q->prefixes, (q->prefix_count + 1) * sizeof(s_sparql_prefix));
+        s_sparql_prefix *new_prefixes = realloc(q->prefixes, (q->prefix_count + 1) * sizeof(s_sparql_prefix));
+        if (!new_prefixes) {
+            free(prefix_name);
+            free(prefix_uri);
+            goto error;
+        }
+        q->prefixes = new_prefixes;
         q->prefixes[q->prefix_count].name = prefix_name;
         q->prefixes[q->prefix_count].uri = prefix_uri;
         q->prefix_count++;
@@ -502,6 +542,11 @@ static p_spec compile_sparql_to_spec(s_sparql_query *q)
     size_t spec_pos = 0;
 
     int *visited = calloc(q->triple_count, sizeof(int));
+    if (!spec || (q->triple_count > 0 && !visited)) {
+        free(spec);
+        free(visited);
+        return NULL;
+    }
 
     for (size_t i = 0; i < q->triple_count; i++) {
         if (visited[i])
@@ -549,6 +594,10 @@ int facts_sparql(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, co
     }
 
     p_spec spec = compile_sparql_to_spec(q);
+    if (!spec) {
+        free_query(q);
+        return -1;
+    }
 
     facts_with(facts, bindings, c, spec);
     if (q->is_ask) {
@@ -590,6 +639,10 @@ char **sparql_projection_vars(s_facts *facts, const char *query, size_t *count)
 
     if (q->is_ask && !vars) {
         vars = malloc(sizeof(char *));
+        if (!vars) {
+            free_query(q);
+            return NULL;
+        }
         vars[0] = NULL;
     }
 
@@ -636,7 +689,16 @@ int facts_sparql_eval(s_facts *facts, const char *query, s_facts_with_cursor *c,
     }
 
     p_spec spec = compile_sparql_to_spec(q);
+    if (!spec) {
+        free_query(q);
+        return -1;
+    }
     s_binding *bindings = spec_bindings(spec);
+    if (!bindings) {
+        free(spec);
+        free_query(q);
+        return -1;
+    }
 
     facts_with(facts, bindings, c, spec);
     if (q->is_ask) {
@@ -662,6 +724,12 @@ int facts_sparql_eval(s_facts *facts, const char *query, s_facts_with_cursor *c,
 
 int facts_sparql_insert(s_facts *facts, const char *query)
 {
+    typedef struct {
+        char *s;
+        char *p;
+        char *o;
+    } s_insert_triple;
+
     s_token_stream stream = tokenize(query);
     if (stream.count == 0 || stream.tokens[0].type == TOKEN_ERROR) {
         free_token_stream(&stream);
@@ -673,6 +741,9 @@ int facts_sparql_insert(s_facts *facts, const char *query)
     // Parse prefixes
     s_sparql_prefix *prefixes = NULL;
     size_t prefix_count = 0;
+    s_insert_triple *triples = NULL;
+    size_t triple_count = 0;
+    size_t triple_capacity = 0;
 
     while (stream.tokens[pos].type == TOKEN_PREFIX) {
         pos++;
@@ -685,6 +756,8 @@ int facts_sparql_insert(s_facts *facts, const char *query)
             goto error;
         }
         char *prefix_name = strndup(pref_token, pref_len - 1);
+        if (!prefix_name)
+            goto error;
         pos++;
 
         if (stream.tokens[pos].type != TOKEN_CONST) {
@@ -692,9 +765,19 @@ int facts_sparql_insert(s_facts *facts, const char *query)
             goto error;
         }
         char *prefix_uri = strdup(stream.tokens[pos].value);
+        if (!prefix_uri) {
+            free(prefix_name);
+            goto error;
+        }
         pos++;
 
-        prefixes = realloc(prefixes, (prefix_count + 1) * sizeof(s_sparql_prefix));
+        s_sparql_prefix *new_prefixes = realloc(prefixes, (prefix_count + 1) * sizeof(s_sparql_prefix));
+        if (!new_prefixes) {
+            free(prefix_name);
+            free(prefix_uri);
+            goto error;
+        }
+        prefixes = new_prefixes;
         prefixes[prefix_count].name = prefix_name;
         prefixes[prefix_count].uri = prefix_uri;
         prefix_count++;
@@ -718,7 +801,6 @@ int facts_sparql_insert(s_facts *facts, const char *query)
     }
     pos++;
 
-    int added_count = 0;
     while (stream.tokens[pos].type != TOKEN_RBRACE) {
         if (stream.tokens[pos].type == TOKEN_EOF || stream.tokens[pos].type == TOKEN_ERROR) {
             goto error;
@@ -746,13 +828,26 @@ int facts_sparql_insert(s_facts *facts, const char *query)
         char *resolved_o = resolve_prefix_list(prefixes, prefix_count, stream.tokens[pos].value);
         pos++;
 
-        // Insert into database
-        if (facts_add_spo(facts, resolved_s, resolved_p, resolved_o)) {
-            added_count++;
+        if (!resolved_s || !resolved_p || !resolved_o) {
+            free(resolved_s);
+            free(resolved_p);
+            free(resolved_o);
+            goto error;
         }
-        free(resolved_s);
-        free(resolved_p);
-        free(resolved_o);
+
+        if (triple_count == triple_capacity) {
+            size_t new_capacity = triple_capacity ? triple_capacity * 2 : 8;
+            s_insert_triple *new_triples = realloc(triples, new_capacity * sizeof(*triples));
+            if (!new_triples) {
+                free(resolved_s);
+                free(resolved_p);
+                free(resolved_o);
+                goto error;
+            }
+            triples = new_triples;
+            triple_capacity = new_capacity;
+        }
+        triples[triple_count++] = (s_insert_triple){resolved_s, resolved_p, resolved_o};
 
         if (stream.tokens[pos].type == TOKEN_DOT) {
             pos++;
@@ -768,6 +863,30 @@ int facts_sparql_insert(s_facts *facts, const char *query)
         goto error;
     }
 
+    if (facts_transaction_begin(facts) != 0)
+        goto error;
+
+    int added_count = 0;
+    for (size_t i = 0; i < triple_count; i++) {
+        if (!facts_get_spo(facts, triples[i].s, triples[i].p, triples[i].o)) {
+            if (!facts_add_spo(facts, triples[i].s, triples[i].p, triples[i].o)) {
+                facts_transaction_rollback(facts);
+                goto error;
+            }
+            added_count++;
+        }
+    }
+    if (facts_transaction_commit(facts) != 0) {
+        facts_transaction_rollback(facts);
+        goto error;
+    }
+
+    for (size_t i = 0; i < triple_count; i++) {
+        free(triples[i].s);
+        free(triples[i].p);
+        free(triples[i].o);
+    }
+    free(triples);
     for (size_t i = 0; i < prefix_count; i++) {
         free(prefixes[i].name);
         free(prefixes[i].uri);
@@ -777,6 +896,12 @@ int facts_sparql_insert(s_facts *facts, const char *query)
     return added_count;
 
 error:
+    for (size_t i = 0; i < triple_count; i++) {
+        free(triples[i].s);
+        free(triples[i].p);
+        free(triples[i].o);
+    }
+    free(triples);
     for (size_t i = 0; i < prefix_count; i++) {
         free(prefixes[i].name);
         free(prefixes[i].uri);
