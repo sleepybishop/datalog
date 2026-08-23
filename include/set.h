@@ -27,6 +27,7 @@ typedef struct set {
 } s_set;
 
 void set_init(s_set *set, size_t max);
+int set_init_checked(s_set *set, size_t max);
 
 void set_destroy(s_set *set);
 
@@ -45,6 +46,7 @@ s_set_item *set_get(s_set *set, const void *data, size_t len);
 s_set_item *set_get_h(s_set *set, const void *data, size_t len, size_t hash);
 
 void set_resize(s_set *set, size_t max);
+int set_resize_checked(s_set *set, size_t max);
 
 typedef struct set_cursor {
     s_set *set;

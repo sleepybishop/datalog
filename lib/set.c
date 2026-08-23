@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "wyhash.h"
@@ -20,14 +21,24 @@ static size_t set_wyhash(const void *key, size_t len)
 
 void set_init(s_set *set, size_t max)
 {
-    assert(set);
-    assert(max > 0);
+    int result = set_init_checked(set, max);
+    assert(result == 0);
+    (void)result;
+}
+
+int set_init_checked(s_set *set, size_t max)
+{
+    if (!set || max == 0 || max > SIZE_MAX / sizeof(s_set_item))
+        return -1;
+    s_set_item *items = calloc(max, sizeof(s_set_item));
+    if (!items)
+        return -1;
     set->max = max;
-    set->items = calloc(max, sizeof(s_set_item));
-    assert(set->items);
+    set->items = items;
     set->count = 0;
     set->collisions = 0;
     set->hash = set_wyhash;
+    return 0;
 }
 
 void set_destroy(s_set *set)
@@ -45,8 +56,10 @@ s_set *new_set(size_t max)
     s_set *set;
     assert(max > 0);
     set = malloc(sizeof(s_set));
-    if (set)
-        set_init(set, max);
+    if (set && set_init_checked(set, max) != 0) {
+        free(set);
+        set = NULL;
+    }
     return set;
 }
 
@@ -76,7 +89,8 @@ s_set_item *set_add_h(s_set *set, void *data, size_t len, size_t hash)
 
     // Keep load factor <= 50% for optimal performance under linear probing
     if (set->count * 2 >= set->max) {
-        set_resize(set, set->max * 2);
+        if (set->max > SIZE_MAX / 2 || set_resize_checked(set, set->max * 2) != 0)
+            return NULL;
     }
 
     size_t i = hash % set->max;
@@ -186,24 +200,49 @@ s_set_item *set_get_h(s_set *set, const void *data, size_t len, size_t hash)
 
 void set_resize(s_set *set, size_t max)
 {
-    assert(set);
+    int result = set_resize_checked(set, max);
+    assert(result == 0);
+    (void)result;
+}
+
+int set_resize_checked(s_set *set, size_t max)
+{
+    if (!set || max == 0 || max > SIZE_MAX / sizeof(s_set_item))
+        return -1;
     if (max == set->max)
-        return;
+        return 0;
     if (max < set->count)
-        return;
+        return -1;
 
     s_set_item *old_items = set->items;
     size_t old_max = set->max;
 
+    s_set_item *new_items = calloc(max, sizeof(s_set_item));
+    if (!new_items)
+        return -1;
     set->max = max;
-    set->items = calloc(max, sizeof(s_set_item));
-    assert(set->items);
+    set->items = new_items;
     set->count = 0;
     set->collisions = 0;
 
     for (size_t i = 0; i < old_max; i++) {
         if (old_items[i].len > 0) {
             s_set_item *new_item = set_add_h(set, old_items[i].data, old_items[i].len, old_items[i].hash);
+            if (!new_item) {
+                free(set->items);
+                set->items = old_items;
+                set->max = old_max;
+                set->count = 0;
+                set->collisions = 0;
+                for (size_t j = 0; j < old_max; j++) {
+                    if (old_items[j].len > 0) {
+                        set->count++;
+                        if (j != old_items[j].hash % old_max)
+                            set->collisions++;
+                    }
+                }
+                return -1;
+            }
             new_item->usage = old_items[i].usage;
             new_item->long_p = old_items[i].long_p;
             new_item->long_value = old_items[i].long_value;
@@ -212,6 +251,7 @@ void set_resize(s_set *set, size_t max)
         }
     }
     free(old_items);
+    return 0;
 }
 
 void set_cursor_init(s_set *set, s_set_cursor *c)
