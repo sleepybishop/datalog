@@ -9,12 +9,21 @@
  * Integrates with our facts database and provides thread-safe concurrent coordination.
  */
 #define LINDA_COND_PARTITIONS 64
+#define LINDA_OK 0
+#define LINDA_TIMEOUT 1
+#define LINDA_ERROR -1
+
+typedef struct linda_pattern s_linda_pattern;
 
 typedef struct {
     s_intern *sym;
     s_facts *db;
     pthread_mutex_t locks[LINDA_COND_PARTITIONS];
     pthread_cond_t conds[LINDA_COND_PARTITIONS];
+    pthread_mutex_t worker_lock;
+    pthread_cond_t worker_cond;
+    size_t active_workers;
+    int shutting_down;
 } s_linda_space;
 
 /* Allocate and initialize a new Linda Tuplespace */
@@ -22,6 +31,10 @@ s_linda_space *new_linda_space(unsigned long max_symbols);
 
 /* Free the Linda Tuplespace and its internal database */
 void delete_linda_space(s_linda_space *space);
+
+/* Compile and own a reusable tuple pattern. Safe to use concurrently. */
+s_linda_pattern *new_linda_pattern(const char *s, const char *p, const char *o);
+void delete_linda_pattern(s_linda_pattern *pattern);
 
 /* Linda out(S, P, O) - Non-blocking insertion of a tuple */
 int linda_out(s_linda_space *space, const char *s, const char *p, const char *o);
@@ -34,6 +47,12 @@ int linda_rd(s_linda_space *space, const char *s, const char *p, const char *o, 
 int linda_in(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
              size_t max_p, char *out_o, size_t max_o);
 
+/* Timed blocking operations. Return LINDA_TIMEOUT when timeout_ms elapses. */
+int linda_rd_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s,
+                   char *out_p, size_t max_p, char *out_o, size_t max_o, long timeout_ms);
+int linda_in_timed(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s,
+                   char *out_p, size_t max_p, char *out_o, size_t max_o, long timeout_ms);
+
 /* Linda rdp(S, P, O, out_s, out_p, out_o) - Non-blocking read (returns 1 if found, 0 if not) */
 int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
               size_t max_p, char *out_o, size_t max_o);
@@ -41,6 +60,19 @@ int linda_rdp(s_linda_space *space, const char *s, const char *p, const char *o,
 /* Linda inp(S, P, O, out_s, out_p, out_o) - Non-blocking consume (returns 1 if found, 0 if not) */
 int linda_inp(s_linda_space *space, const char *s, const char *p, const char *o, char *out_s, size_t max_s, char *out_p,
               size_t max_p, char *out_o, size_t max_o);
+
+int linda_rd_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
+                     size_t max_p, char *out_o, size_t max_o);
+int linda_in_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
+                     size_t max_p, char *out_o, size_t max_o);
+int linda_rdp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
+                      size_t max_p, char *out_o, size_t max_o);
+int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
+                      size_t max_p, char *out_o, size_t max_o);
+int linda_rd_pattern_timed(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
+                           size_t max_p, char *out_o, size_t max_o, long timeout_ms);
+int linda_in_pattern_timed(s_linda_space *space, const s_linda_pattern *pattern, char *out_s, size_t max_s, char *out_p,
+                           size_t max_p, char *out_o, size_t max_o, long timeout_ms);
 
 /* Linda eval() worker function type */
 typedef void *(*f_linda_worker)(void *arg);
