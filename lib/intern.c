@@ -183,8 +183,10 @@ void intern_unstring(s_intern *intern, Symbol sym)
         if (!i->usage) {
             void *old;
             int ret = raxRemove(intern->symbols, (unsigned char *)sym->data, strlen(sym->data), &old);
-            (void)ret;
-            assert(ret == 1);
+            /* an allocation failure walking a deep trie must not leave a freed
+             * value reachable from the table; a zero-use item can be reused. */
+            if (ret != 1)
+                return;
             assert(old == i);
             free(i);
         }

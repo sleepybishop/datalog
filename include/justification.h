@@ -45,4 +45,21 @@ int justification_graph_remove_support(s_justification_graph *graph, const char 
                                        s_justification_support **conclusions_out, size_t *conclusion_count_out);
 void justification_support_array_destroy(s_justification_support *items, size_t count);
 
+/* determine whether a conclusion has a finite proof rooted in external
+ * support, rather than relying solely on a recursive cycle; the callback
+ * returns 1 for asserted positive support or a satisfied negative support,
+ * 0 otherwise, and -1 on error. returns 1/0/-1 on the same convention. */
+typedef int (*f_justification_external_support)(const s_justification_support *support, void *user_data);
+typedef struct justification_grounding s_justification_grounding;
+
+/* owned snapshot of all grounded conclusions; rebuild after changes to proofs
+ * or external support. triple keys remain valid if the source graph changes. */
+s_justification_grounding *new_justification_grounding(const s_justification_graph *graph,
+                                                       f_justification_external_support external_support, void *user_data);
+void delete_justification_grounding(s_justification_grounding *grounding);
+int justification_grounding_contains(const s_justification_grounding *grounding, const char *s, const char *p, const char *o);
+
+int justification_graph_is_grounded(const s_justification_graph *graph, const char *s, const char *p, const char *o,
+                                    f_justification_external_support external_support, void *user_data);
+
 #endif

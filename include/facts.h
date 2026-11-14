@@ -28,6 +28,9 @@ typedef struct facts {
     struct rax *index_osp;
     s_hexastore *hexastore;
     FILE *log;
+    /* deleted facts retain their index storage until the outer transaction ends. */
+    s_fact *retired_facts;
+    size_t retired_count;
 
     // Decoupled Transactions
     s_transaction tx;
@@ -144,6 +147,7 @@ typedef struct facts_cursor {
     int started;
     int locked;
     int index_type;
+    int error;
     const char **var_s;
     const char **var_p;
     const char **var_o;
@@ -154,6 +158,7 @@ void facts_cursor_init(s_facts *facts, s_facts_cursor *c, struct rax *tree, s_fa
 s_fact *facts_cursor_next(s_facts_cursor *c);
 
 void facts_cursor_stop(s_facts_cursor *c);
+int facts_cursor_error(const s_facts_cursor *c);
 
 void facts_with_3(s_facts *facts, s_facts_cursor *c, const char *s, const char *p, const char *o);
 
@@ -175,9 +180,11 @@ typedef struct facts_with_cursor {
     s_facts *facts;
     s_binding *bindings;
     size_t facts_count;
+    size_t allocated_levels;
     s_facts_with_cursor_level *l;
     size_t level;
     p_spec spec;
+    unsigned char *variable_masks;
     int locked;
     long limit;
     long offset;
@@ -193,6 +200,9 @@ typedef struct facts_with_cursor {
 
 void facts_with(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_spec spec);
 int facts_with_checked(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, p_spec spec);
+/* flat triples with explicit variable bits (S=1, P=2, O=4); copies its input. */
+int facts_with_typed_checked(s_facts *facts, s_binding *bindings, s_facts_with_cursor *c, const s_spec_fact *triples,
+                             const unsigned char *variable_masks, size_t count);
 void facts_spec_sort(s_facts *facts, p_spec spec, size_t count);
 
 void facts_with_cursor_destroy(s_facts_with_cursor *c);

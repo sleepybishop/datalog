@@ -10,5 +10,6 @@ int facts_justifications_stage(s_facts *facts, int preserve_existing);
 void facts_justifications_commit(s_facts *facts);
 void facts_justifications_discard(s_facts *facts);
 int facts_reset_local_db(s_facts *facts);
+void facts_reclaim_retired(s_facts *facts);
 
 #endif

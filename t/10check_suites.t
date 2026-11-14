@@ -20,6 +20,8 @@ subtest "check suites" => sub {
         "check_fact",
         "check_facts",
         "check_intern",
+        "check_io",
+        "check_storage_failures",
         "check_set",
         "check_spec",
         "check_movie_integration",

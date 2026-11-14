@@ -88,6 +88,7 @@ void process_input(s_facts *facts, const char *line, const char *db_filename)
     if (*line == '\0') {
         return;
     }
+    e_sparql_statement_kind statement_kind = sparql_statement_kind(line);
 
     if (strcasecmp(line, "SHOW RULES") == 0) {
         datalog_program_print(repl_program, stdout);
@@ -96,13 +97,13 @@ void process_input(s_facts *facts, const char *line, const char *db_filename)
         repl_program = new_datalog_program();
         facts_detach_program(facts);
         printf("Rules cleared.\n");
-    } else if (strstr(line, ":-") != NULL) {
+    } else if (statement_kind == SPARQL_STATEMENT_RULE) {
         if (datalog_program_parse_rules(repl_program, line) == 0 && facts_attach_program(facts, repl_program) == 0) {
             printf("Successfully added rule(s).\n");
         } else {
             fprintf(stderr, "Error: failed to parse or validate rule(s)\n");
         }
-    } else if (strncasecmp(line, "INSERT", 6) == 0) {
+    } else if (statement_kind == SPARQL_STATEMENT_INSERT) {
         int added = facts_sparql_insert(facts, line);
         if (added >= 0) {
             printf("Successfully added %d facts.\n", added);
@@ -110,12 +111,13 @@ void process_input(s_facts *facts, const char *line, const char *db_filename)
             if (db_filename) {
                 FILE *fp = fopen(db_filename, "w");
                 if (fp) {
-                    if (write_facts(facts, fp) >= 0) {
+                    int written = write_facts(facts, fp);
+                    int closed = fclose(fp);
+                    if (written == 0 && closed == 0) {
                         printf("Persisted database changes to '%s'.\n", db_filename);
                     } else {
                         fprintf(stderr, "Error: failed to persist database changes to '%s'\n", db_filename);
                     }
-                    fclose(fp);
                 } else {
                     fprintf(stderr, "Error: could not open database file '%s' for writing\n", db_filename);
                 }
@@ -123,7 +125,7 @@ void process_input(s_facts *facts, const char *line, const char *db_filename)
         } else {
             fprintf(stderr, "Error: failed to parse or execute INSERT statement\n");
         }
-    } else if (strncasecmp(line, "SELECT", 6) == 0 || strncasecmp(line, "ASK", 3) == 0 || strncasecmp(line, "PREFIX", 6) == 0) {
+    } else if (statement_kind == SPARQL_STATEMENT_SELECT || statement_kind == SPARQL_STATEMENT_ASK) {
         execute_query(facts, line);
     } else {
         fprintf(stderr, "Error: unknown statement type (only SELECT, ASK and INSERT DATA statements are supported)\n");

@@ -13,6 +13,8 @@ void fact_init(s_fact *f, Symbol s, Symbol p, Symbol o)
     f->negated = NULL;
     f->asserted_count = 1;
     f->derived_count = 0;
+    f->retirement_queued = 0;
+    f->retired_next = NULL;
 }
 
 s_fact *new_fact(Symbol s, Symbol p, Symbol o)
@@ -25,6 +27,8 @@ s_fact *new_fact(Symbol s, Symbol p, Symbol o)
         fact->negated = NULL;
         fact->asserted_count = 1;
         fact->derived_count = 0;
+        fact->retirement_queued = 0;
+        fact->retired_next = NULL;
     }
     return fact;
 }

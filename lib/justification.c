@@ -277,3 +277,193 @@ int justification_graph_remove_support(s_justification_graph *graph, const char 
     graph->count = write_idx;
     return removed;
 }
+
+typedef struct grounding_node {
+    char *s;
+    char *p;
+    char *o;
+    uint64_t hash;
+    size_t dependents;
+    int grounded;
+} s_grounding_node;
+
+struct justification_grounding {
+    s_grounding_node *nodes;
+    size_t node_count;
+    size_t *slots;
+    size_t slot_count;
+};
+
+typedef struct grounding_edge {
+    size_t proof;
+    size_t next;
+} s_grounding_edge;
+
+void delete_justification_grounding(s_justification_grounding *grounding)
+{
+    if (!grounding)
+        return;
+    for (size_t i = 0; i < grounding->node_count; i++)
+        free(grounding->nodes[i].s);
+    free(grounding->nodes);
+    free(grounding->slots);
+    free(grounding);
+}
+
+static size_t grounding_slot(const s_justification_grounding *grounding, uint64_t hash, const char *s, const char *p, const char *o)
+{
+    size_t slot = (size_t)hash & (grounding->slot_count - 1);
+    while (grounding->slots[slot]) {
+        const s_grounding_node *node = &grounding->nodes[grounding->slots[slot] - 1];
+        if (node->hash == hash && strcmp(node->s, s) == 0 && strcmp(node->p, p) == 0 && strcmp(node->o, o) == 0)
+            break;
+        slot = (slot + 1) & (grounding->slot_count - 1);
+    }
+    return slot;
+}
+
+int justification_grounding_contains(const s_justification_grounding *grounding, const char *s, const char *p, const char *o)
+{
+    if (!grounding || !s || !p || !o || !grounding->node_count)
+        return 0;
+    size_t slot = grounding_slot(grounding, hash_triple(s, p, o), s, p, o);
+    return grounding->slots[slot] && grounding->nodes[grounding->slots[slot] - 1].grounded;
+}
+
+s_justification_grounding *new_justification_grounding(const s_justification_graph *graph,
+                                                       f_justification_external_support external_support, void *user_data)
+{
+    if (!graph || !external_support)
+        return NULL;
+    s_justification_grounding *grounding = calloc(1, sizeof(*grounding));
+    size_t *remaining = NULL, *conclusions = NULL, *queue = NULL;
+    s_grounding_edge *edges = NULL;
+    if (!grounding || !graph->count)
+        return grounding;
+    if (graph->count > SIZE_MAX / sizeof(*grounding->nodes) || graph->count > SIZE_MAX / sizeof(size_t) ||
+        graph->count > SIZE_MAX / 2)
+        goto error;
+    size_t slots = 2;
+    while (slots < graph->count * 2) {
+        if (slots > SIZE_MAX / 2)
+            goto error;
+        slots *= 2;
+    }
+    if (slots > SIZE_MAX / sizeof(*grounding->slots))
+        goto error;
+    grounding->slot_count = slots;
+    grounding->nodes = calloc(graph->count, sizeof(*grounding->nodes));
+    grounding->slots = calloc(slots, sizeof(*grounding->slots));
+    remaining = calloc(graph->count, sizeof(*remaining));
+    conclusions = malloc(graph->count * sizeof(*conclusions));
+    queue = malloc(graph->count * sizeof(*queue));
+    if (!grounding->nodes || !grounding->slots || !remaining || !conclusions || !queue)
+        goto error;
+
+    size_t support_count = 0;
+    for (size_t i = 0; i < graph->count; i++) {
+        const s_justification *proof = &graph->items[i];
+        if (proof->support_count > SIZE_MAX - support_count)
+            goto error;
+        support_count += proof->support_count;
+        size_t slot = grounding_slot(grounding, proof->conclusion_hash, proof->s, proof->p, proof->o);
+        if (!grounding->slots[slot]) {
+            size_t s_len = strlen(proof->s) + 1;
+            size_t p_len = strlen(proof->p) + 1;
+            size_t o_len = strlen(proof->o) + 1;
+            if (s_len > SIZE_MAX - p_len || s_len + p_len > SIZE_MAX - o_len)
+                goto error;
+            char *key = malloc(s_len + p_len + o_len);
+            if (!key)
+                goto error;
+            s_grounding_node *node = &grounding->nodes[grounding->node_count];
+            node->s = key;
+            node->p = key + s_len;
+            node->o = key + s_len + p_len;
+            memcpy(node->s, proof->s, s_len);
+            memcpy(node->p, proof->p, p_len);
+            memcpy(node->o, proof->o, o_len);
+            node->hash = proof->conclusion_hash;
+            node->dependents = SIZE_MAX;
+            grounding->slots[slot] = ++grounding->node_count;
+        }
+        conclusions[i] = grounding->slots[slot] - 1;
+    }
+    if (support_count > SIZE_MAX / sizeof(*edges))
+        goto error;
+    edges = support_count ? malloc(support_count * sizeof(*edges)) : NULL;
+    if (support_count && !edges)
+        goto error;
+
+    size_t edge_count = 0, queued = 0;
+    for (size_t i = 0; i < graph->count; i++) {
+        const s_justification *proof = &graph->items[i];
+        for (size_t j = 0; j < proof->support_count; j++) {
+            const s_justification_support *support = &proof->supports[j];
+            int supported = external_support(support, user_data);
+            if (supported < 0)
+                goto error;
+            if (supported)
+                continue;
+            if (support->negated) {
+                remaining[i] = SIZE_MAX;
+                break;
+            }
+            size_t slot =
+                grounding_slot(grounding, hash_triple(support->s, support->p, support->o), support->s, support->p, support->o);
+            if (!grounding->slots[slot]) {
+                remaining[i] = SIZE_MAX;
+                break;
+            }
+            s_grounding_node *dependency = &grounding->nodes[grounding->slots[slot] - 1];
+            edges[edge_count].proof = i;
+            edges[edge_count].next = dependency->dependents;
+            dependency->dependents = edge_count++;
+            remaining[i]++;
+        }
+        if (!remaining[i] && !grounding->nodes[conclusions[i]].grounded) {
+            grounding->nodes[conclusions[i]].grounded = 1;
+            queue[queued++] = conclusions[i];
+        }
+    }
+
+    /* a proof becomes grounded once all its positive dependencies do; cycles
+     * without an external root never enter the queue. each edge is visited once. */
+    for (size_t next = 0; next < queued; next++) {
+        for (size_t edge = grounding->nodes[queue[next]].dependents; edge != SIZE_MAX; edge = edges[edge].next) {
+            size_t proof = edges[edge].proof;
+            if (remaining[proof] == SIZE_MAX || !remaining[proof])
+                continue;
+            if (--remaining[proof] == 0 && !grounding->nodes[conclusions[proof]].grounded) {
+                grounding->nodes[conclusions[proof]].grounded = 1;
+                queue[queued++] = conclusions[proof];
+            }
+        }
+    }
+    free(edges);
+    free(queue);
+    free(conclusions);
+    free(remaining);
+    return grounding;
+
+error:
+    free(edges);
+    free(queue);
+    free(conclusions);
+    free(remaining);
+    delete_justification_grounding(grounding);
+    return NULL;
+}
+
+int justification_graph_is_grounded(const s_justification_graph *graph, const char *s, const char *p, const char *o,
+                                    f_justification_external_support external_support, void *user_data)
+{
+    if (!s || !p || !o)
+        return -1;
+    s_justification_grounding *grounding = new_justification_grounding(graph, external_support, user_data);
+    if (!grounding)
+        return -1;
+    int result = justification_grounding_contains(grounding, s, p, o);
+    delete_justification_grounding(grounding);
+    return result;
+}

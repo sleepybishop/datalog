@@ -516,6 +516,318 @@ START_TEST(test_justification_retraction_does_not_churn_unrelated_closure)
 }
 END_TEST
 
+static s_facts *eval_test_database(const char *rules)
+{
+    s_facts *facts = new_facts(NULL, 256);
+    s_datalog_program *program = new_datalog_program();
+    ck_assert(facts && program);
+    ck_assert_int_eq(datalog_program_parse_rules(program, rules), 0);
+    ck_assert_int_eq(facts_attach_program(facts, program), 0);
+    delete_datalog_program(program);
+    return facts;
+}
+
+START_TEST(test_recursive_retraction_requires_external_support)
+{
+    s_facts *facts = eval_test_database("?x p yes :- ?x source yes . ?x q yes :- ?x p yes . ?x p yes :- ?x q yes .");
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "lost", "source", "yes"));
+    ck_assert(facts_add_spo(facts, "kept", "source", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    facts_register_commit_summary_observer(facts, retraction_summary_observer, NULL);
+    retraction_physical_changes = 0;
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "lost", "source", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "lost", "p", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "lost", "q", "yes"), 0);
+    ck_assert_int_eq(facts_justification_count(facts, "lost", "p", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "kept", "p", "yes"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "kept", "q", "yes"), 1);
+    ck_assert_int_eq(retraction_physical_changes, 3);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_recursive_retraction_after_asserted_support_change)
+{
+    s_facts *facts = eval_test_database("?x p yes :- ?x q yes . ?x q yes :- ?x p yes .");
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "a", "p", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    s_fact_support support;
+    ck_assert_int_eq(facts_get_support_spo(facts, "a", "p", "yes", &support), 1);
+    ck_assert_int_eq(support.derived, 1);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "a", "p", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "p", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "q", "yes"), 0);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_derived_negation_invalidation_reaches_later_strata)
+{
+    s_facts *facts = eval_test_database("?x bad yes :- ?x trigger yes . "
+                                        "?x good yes :- ?x node yes, NOT(?x bad yes) . "
+                                        "?x denied yes :- ?x node yes, NOT(?x good yes) .");
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "a", "node", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "good", "yes"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "denied", "yes"), 0);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "a", "trigger", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "bad", "yes"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "good", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "denied", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "a", "trigger", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "good", "yes"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "denied", "yes"), 0);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_full_evaluation_uses_asserted_idb_tuples)
+{
+    s_facts *facts = new_facts(NULL, 256);
+    s_datalog_program *program = new_datalog_program();
+    ck_assert(facts_add_spo(facts, "a", "path", "b"));
+    ck_assert(facts_add_spo(facts, "b", "path", "c"));
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?x path ?z :- ?x path ?y, ?y path ?z ."), 0);
+    ck_assert_int_eq(facts_attach_program(facts, program), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "path", "c"), 1);
+    delete_datalog_program(program);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_negation_rescan_joins_existing_derived_tuples)
+{
+    s_facts *facts = eval_test_database("?x p yes :- ?x source yes, NOT(?x other yes) . "
+                                        "?x q yes :- ?x node yes, NOT(?x blocked yes) . "
+                                        "?x r yes :- ?x p yes, ?x q yes .");
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "a", "source", "yes"));
+    ck_assert(facts_add_spo(facts, "a", "blocked", "yes"));
+    ck_assert(facts_add_spo(facts, "a", "node", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "p", "yes"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "r", "yes"), 0);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "a", "blocked", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "r", "yes"), 1);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_same_transaction_asserted_and_derived_support)
+{
+    s_facts *facts = eval_test_database("?x p yes :- ?x source yes .");
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "a", "source", "yes"));
+    ck_assert(facts_add_spo(facts, "a", "p", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    s_fact_support support;
+    ck_assert_int_eq(facts_get_support_spo(facts, "a", "p", "yes", &support), 1);
+    ck_assert_int_eq(support.asserted, 1);
+    ck_assert_int_eq(support.derived, 1);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "a", "p", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_get_support_spo(facts, "a", "p", "yes", &support), 1);
+    ck_assert_int_eq(support.asserted, 0);
+    ck_assert_int_eq(support.derived, 1);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_standalone_incremental_recursive_deletion)
+{
+    s_facts *facts = new_facts(NULL, 256);
+    s_datalog_program *program = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?x p yes :- ?x source yes . ?x p yes :- ?x p yes ."), 0);
+    ck_assert(facts_add_spo(facts, "a", "source", "yes"));
+    ck_assert(facts_add_spo(facts, "kept", "source", "yes"));
+    ck_assert_int_eq(facts_datalog_eval(facts, program), 2);
+    facts_register_commit_summary_observer(facts, retraction_summary_observer, NULL);
+    retraction_physical_changes = 0;
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "a", "source", "yes"), 1);
+    ck_assert_int_eq(facts_datalog_eval_incremental(facts, program, facts->tx.rollback.entries, facts->tx.rollback.size), 0);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "p", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "kept", "p", "yes"), 1);
+    ck_assert_int_eq(retraction_physical_changes, 2);
+    delete_datalog_program(program);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_variable_predicates_full_and_incremental)
+{
+    s_facts *facts = new_facts(NULL, 256);
+    s_datalog_program *program = new_datalog_program();
+    ck_assert(facts_add_spo(facts, "a", "wants", "p"));
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?x ?p yes :- ?x wants ?p . ?y ?p ?x :- ?x ?p ?y ."), 0);
+    ck_assert_int_eq(facts_attach_program(facts, program), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "p", "yes"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "yes", "p", "a"), 1);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "b", "wants", "q"));
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "b", "q", "yes"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "yes", "q", "b"), 1);
+    delete_datalog_program(program);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_ground_negation_and_empty_rule_body)
+{
+    s_facts *facts = eval_test_database("a p b :- NOT(a q b) . a q b :- a trigger yes .");
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "p", "b"), 1);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "a", "trigger", "yes"));
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "p", "b"), 0);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "a", "trigger", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "p", "b"), 1);
+    s_datalog_program *program = new_datalog_program();
+    s_spec_fact head = {"ground", "fact", "yes", NULL};
+    ck_assert(datalog_program_add_rule(program, &head, NULL, 0));
+    ck_assert_int_eq(facts_attach_program(facts, program), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "ground", "fact", "yes"), 1);
+    delete_facts(facts);
+
+    facts = new_facts(NULL, 256);
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "unrelated", "source", "yes"));
+    ck_assert_int_eq(facts_datalog_eval_incremental(facts, program, facts->tx.rollback.entries, facts->tx.rollback.size), 1);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "ground", "fact", "yes"), 1);
+    delete_datalog_program(program);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_cancelled_insertion_does_not_create_phantom_derivation)
+{
+    s_facts *facts = eval_test_database("?x p yes :- ?x source yes .");
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert(facts_add_spo(facts, "a", "source", "yes"));
+    ck_assert_int_eq(facts_remove_spo(facts, "a", "source", "yes"), 1);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "p", "yes"), 0);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_standalone_reconcile_preserves_other_program_outputs)
+{
+    s_facts *facts = new_facts(NULL, 256);
+    s_datalog_program *program_a = new_datalog_program();
+    s_datalog_program *program_b = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(program_a, "?x a yes :- ?x source_a yes ."), 0);
+    ck_assert_int_eq(datalog_program_parse_rules(program_b, "?x b yes :- ?x source_b yes ."), 0);
+    ck_assert(facts_add_spo(facts, "x", "source_a", "yes"));
+    ck_assert(facts_add_spo(facts, "x", "source_b", "yes"));
+    ck_assert_int_eq(facts_datalog_eval(facts, program_a), 1);
+    ck_assert_int_eq(facts_datalog_eval(facts, program_b), 1);
+
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "x", "source_a", "yes"), 1);
+    ck_assert_int_eq(facts_datalog_eval_incremental(facts, program_a, facts->tx.rollback.entries, facts->tx.rollback.size), 0);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "x", "a", "yes"), 0);
+    s_fact_support support;
+    ck_assert_int_eq(facts_get_support_spo(facts, "x", "b", "yes", &support), 1);
+    ck_assert_int_eq(support.asserted, 0);
+    ck_assert_int_eq(support.derived, 1);
+    delete_datalog_program(program_a);
+    delete_datalog_program(program_b);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_standalone_reconcile_uses_external_derived_inputs)
+{
+    s_facts *facts = new_facts(NULL, 256);
+    s_datalog_program *program_a = new_datalog_program();
+    s_datalog_program *program_b = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(program_a, "?x a yes :- ?x b yes, ?x guard yes . ?x a yes :- ?x a yes . "
+                                                            "?x kept yes :- ?x b yes ."),
+                     0);
+    ck_assert_int_eq(datalog_program_parse_rules(program_b, "?x b yes :- ?x source_b yes ."), 0);
+    ck_assert(facts_add_spo(facts, "x", "source_b", "yes"));
+    ck_assert(facts_add_spo(facts, "x", "guard", "yes"));
+    ck_assert_int_eq(facts_datalog_eval(facts, program_b), 1);
+    ck_assert_int_eq(facts_datalog_eval(facts, program_a), 2);
+
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "x", "guard", "yes"), 1);
+    ck_assert_int_eq(facts_datalog_eval_incremental(facts, program_a, facts->tx.rollback.entries, facts->tx.rollback.size), 0);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "x", "a", "yes"), 0);
+    const char *preserved[] = {"b", "kept"};
+    for (size_t i = 0; i < 2; i++) {
+        s_fact_support support;
+        ck_assert_int_eq(facts_get_support_spo(facts, "x", preserved[i], "yes", &support), 1);
+        ck_assert_int_eq(support.asserted, 0);
+        ck_assert_int_eq(support.derived, 1);
+    }
+    delete_datalog_program(program_a);
+    delete_datalog_program(program_b);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_standalone_reconcile_respects_head_constants_and_equalities)
+{
+    s_facts *facts = new_facts(NULL, 256);
+    s_datalog_program *program_a = new_datalog_program();
+    s_datalog_program *program_b = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(program_a, "local shared ?v :- local source ?v . ?x mirror ?x :- ?x source yes . "
+                                                            "owned ?p ?p :- seed chooses ?p ."),
+                     0);
+    ck_assert_int_eq(datalog_program_parse_rules(program_b,
+                                                 "foreign shared outside :- seed base yes . left mirror right :- seed base yes . "
+                                                 "owned other value :- seed base yes ."),
+                     0);
+    ck_assert(facts_add_spo(facts, "seed", "base", "yes"));
+    ck_assert(facts_add_spo(facts, "local", "source", "yes"));
+    ck_assert(facts_add_spo(facts, "seed", "chooses", "picked"));
+    ck_assert_int_eq(facts_datalog_eval(facts, program_b), 3);
+    ck_assert_int_eq(facts_datalog_eval(facts, program_a), 3);
+
+    ck_assert_int_eq(facts_transaction_begin(facts), 0);
+    ck_assert_int_eq(facts_remove_spo(facts, "local", "source", "yes"), 1);
+    ck_assert_int_eq(facts_remove_spo(facts, "seed", "chooses", "picked"), 1);
+    ck_assert_int_eq(facts_datalog_eval_incremental(facts, program_a, facts->tx.rollback.entries, facts->tx.rollback.size), 0);
+    ck_assert_int_eq(facts_transaction_commit(facts), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "local", "shared", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "local", "mirror", "local"), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "owned", "picked", "picked"), 0);
+    const char *preserved[][3] = {{"foreign", "shared", "outside"}, {"left", "mirror", "right"}, {"owned", "other", "value"}};
+    for (size_t i = 0; i < 3; i++) {
+        s_fact_support support;
+        ck_assert_int_eq(facts_get_support_spo(facts, preserved[i][0], preserved[i][1], preserved[i][2], &support), 1);
+        ck_assert_int_eq(support.asserted, 0);
+        ck_assert_int_eq(support.derived, 1);
+    }
+    delete_datalog_program(program_a);
+    delete_datalog_program(program_b);
+    delete_facts(facts);
+}
+END_TEST
+
 Suite *eval_suite(void)
 {
     Suite *s;
@@ -539,6 +851,20 @@ Suite *eval_suite(void)
     tcase_add_test(tc_core, test_justification_graph_tracks_alternative_grounded_proofs);
     tcase_add_test(tc_core, test_justification_graph_tracks_recursive_chain);
     tcase_add_test(tc_core, test_justification_retraction_does_not_churn_unrelated_closure);
+
+    tcase_add_test(tc_core, test_recursive_retraction_requires_external_support);
+    tcase_add_test(tc_core, test_recursive_retraction_after_asserted_support_change);
+    tcase_add_test(tc_core, test_derived_negation_invalidation_reaches_later_strata);
+    tcase_add_test(tc_core, test_full_evaluation_uses_asserted_idb_tuples);
+    tcase_add_test(tc_core, test_negation_rescan_joins_existing_derived_tuples);
+    tcase_add_test(tc_core, test_same_transaction_asserted_and_derived_support);
+    tcase_add_test(tc_core, test_standalone_incremental_recursive_deletion);
+    tcase_add_test(tc_core, test_variable_predicates_full_and_incremental);
+    tcase_add_test(tc_core, test_ground_negation_and_empty_rule_body);
+    tcase_add_test(tc_core, test_cancelled_insertion_does_not_create_phantom_derivation);
+    tcase_add_test(tc_core, test_standalone_reconcile_preserves_other_program_outputs);
+    tcase_add_test(tc_core, test_standalone_reconcile_uses_external_derived_inputs);
+    tcase_add_test(tc_core, test_standalone_reconcile_respects_head_constants_and_equalities);
 
     suite_add_tcase(s, tc_core);
     return s;

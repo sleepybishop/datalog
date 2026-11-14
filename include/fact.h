@@ -19,6 +19,9 @@ typedef struct fact {
     /* support classes are idempotent: a fact may be asserted, derived, or both. */
     unsigned char asserted_count;
     unsigned char derived_count;
+    /* transaction-local deferred reclamation; not part of the fact key. */
+    unsigned char retirement_queued;
+    struct fact *retired_next;
 } s_fact;
 
 typedef int (*f_fact)(s_fact *f);

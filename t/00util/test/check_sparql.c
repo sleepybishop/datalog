@@ -408,6 +408,92 @@ START_TEST(test_sparql_does_not_leak_symbols_or_break_escaped_quotes)
 }
 END_TEST
 
+START_TEST(test_sparql_preserves_constant_term_kinds)
+{
+    ck_assert_int_eq(5,
+                     facts_sparql_insert(g_f, "PREFIX ex: <http://example.org/> INSERT DATA { "
+                                              "<literal> <label> \"ex:literal\" . <iri> <label> <ex:literal> . "
+                                              "<question> <label> \"?s\" . <:not> <label> \"sentinel\" . <?s> <link> <end> . }"));
+    ck_assert_int_eq(1, facts_contains_spo(g_f, "literal", "label", "ex:literal"));
+    ck_assert_int_eq(1, facts_contains_spo(g_f, "iri", "label", "ex:literal"));
+    ck_assert_int_eq(0, facts_contains_spo(g_f, "literal", "label", "http://example.org/literal"));
+
+    s_facts_with_cursor c;
+    s_binding *bindings = NULL;
+    ck_assert_int_eq(
+        0, facts_sparql_eval(g_f, "PREFIX ex: <http://example.org/> SELECT ?s WHERE { ?s <label> \"ex:literal\" }", &c, &bindings));
+    int count = 0;
+    while (facts_with_cursor_next(&c))
+        count++;
+    ck_assert_int_eq(2, count);
+    facts_with_cursor_destroy(&c);
+    free(bindings);
+
+    ck_assert_int_eq(0, facts_sparql_eval(g_f, "SELECT ?s WHERE { ?s <label> \"?s\" }", &c, &bindings));
+    ck_assert(facts_with_cursor_next(&c));
+    ck_assert_str_eq("question", *bindings_get(bindings, "?s"));
+    ck_assert(!facts_with_cursor_next(&c));
+    facts_with_cursor_destroy(&c);
+    free(bindings);
+
+    ck_assert_int_eq(0, facts_sparql_eval(g_f, "SELECT ?s ?x WHERE { ?s <label> ?x . ?x <link> <end> }", &c, &bindings));
+    ck_assert(facts_with_cursor_next(&c));
+    ck_assert_str_eq("question", *bindings_get(bindings, "?s"));
+    ck_assert_str_eq("?s", *bindings_get(bindings, "?x"));
+    ck_assert(!facts_with_cursor_next(&c));
+    facts_with_cursor_destroy(&c);
+    free(bindings);
+
+    ck_assert_int_eq(0, facts_sparql_eval(g_f, "ASK WHERE { <:not> <label> \"sentinel\" }", &c, &bindings));
+    ck_assert(facts_with_cursor_next(&c));
+    facts_with_cursor_destroy(&c);
+    free(bindings);
+}
+END_TEST
+
+START_TEST(test_sparql_repeated_variables_require_equal_terms)
+{
+    facts_add_spo(g_f, "left", "edge", "right");
+    facts_add_spo(g_f, "self", "edge", "self");
+    s_facts_with_cursor c;
+    s_binding *bindings = NULL;
+    ck_assert_int_eq(0, facts_sparql_eval(g_f, "SELECT ?x WHERE { ?x <edge> ?x }", &c, &bindings));
+    ck_assert(facts_with_cursor_next(&c));
+    ck_assert_str_eq("self", *bindings_get(bindings, "?x"));
+    ck_assert(!facts_with_cursor_next(&c));
+    facts_with_cursor_destroy(&c);
+    free(bindings);
+    ck_assert_int_eq(0, facts_sparql_eval(g_f, "ASK WHERE { NOT ?x <b> ?x }", &c, &bindings));
+    ck_assert(facts_with_cursor_next(&c));
+    facts_with_cursor_destroy(&c);
+    free(bindings);
+}
+END_TEST
+
+START_TEST(test_sparql_statement_classification)
+{
+    ck_assert_int_eq(SPARQL_STATEMENT_INSERT,
+                     sparql_statement_kind("PREFIX ex: <http://example.org/> INSERT DATA { ex:s ex:p \"x:-y\" }"));
+    ck_assert_int_eq(SPARQL_STATEMENT_INSERT,
+                     sparql_statement_kind("PREFIX ex: <http://example.org/> INSERT DATA { ex:-subject ex:p ex:o }"));
+    ck_assert_int_eq(SPARQL_STATEMENT_INSERT,
+                     sparql_statement_kind("PREFIX : <http://example/> INSERT DATA { :-subject :p :o . :- :p :o }"));
+    ck_assert_int_eq(SPARQL_STATEMENT_ASK,
+                     sparql_statement_kind("PREFIX : <http://example/> ASK WHERE { :-subject :p :o . :- :p :o }"));
+    ck_assert_int_eq(SPARQL_STATEMENT_SELECT, sparql_statement_kind("SELECT ?x WHERE { ?x <p> \"x:-y\" }"));
+    ck_assert_int_eq(SPARQL_STATEMENT_ASK, sparql_statement_kind("ASK WHERE { <x:-y> <p> <o> }"));
+    ck_assert_int_eq(SPARQL_STATEMENT_RULE, sparql_statement_kind("(?s result ?o) :- (?s source ?o)."));
+    const char *keyword_rules[] = {
+        "SELECT <derived> <yes> :- <a> <source> <yes> .",   "ASK <derived> <yes> :- <a> <source> <yes> .",
+        "INSERT <derived> <yes> :- <a> <source> <yes> .",   "\"INSERT\" <derived> <yes> :- <a> <source> <yes> .",
+        "<INSERT> <derived> <yes> :- <a> <source> <yes> .", "?x <derived> ?o:- ?x <source> ?o .",
+    };
+    for (size_t i = 0; i < sizeof(keyword_rules) / sizeof(keyword_rules[0]); i++)
+        ck_assert_int_eq(SPARQL_STATEMENT_RULE, sparql_statement_kind(keyword_rules[i]));
+    ck_assert_int_eq(SPARQL_STATEMENT_UNKNOWN, sparql_statement_kind("\"x:-y\""));
+}
+END_TEST
+
 Suite *sparql_suite(void)
 {
     Suite *s;
@@ -427,6 +513,9 @@ Suite *sparql_suite(void)
     tcase_add_test(tc_core, test_sparql_orderby);
     tcase_add_test(tc_core, test_sparql_rule_engine);
     tcase_add_test(tc_core, test_sparql_does_not_leak_symbols_or_break_escaped_quotes);
+    tcase_add_test(tc_core, test_sparql_preserves_constant_term_kinds);
+    tcase_add_test(tc_core, test_sparql_repeated_variables_require_equal_terms);
+    tcase_add_test(tc_core, test_sparql_statement_classification);
     suite_add_tcase(s, tc_core);
     return s;
 }

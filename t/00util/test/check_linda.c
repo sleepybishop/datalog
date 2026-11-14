@@ -324,6 +324,27 @@ START_TEST(test_linda_notification_survives_public_observer_registration)
 }
 END_TEST
 
+START_TEST(test_linda_wakes_when_derived_tuple_becomes_asserted)
+{
+    for (int consume = 0; consume < 2; consume++) {
+        s_linda_space *space = new_linda_space(1000);
+        ck_assert(space != NULL);
+        s_facts *facts = linda_space_facts(space);
+        ck_assert(facts_add_spo_origin(facts, "direct", "commit", "visible", FACT_ORIGIN_DERIVED) != NULL);
+        pthread_t producer;
+        ck_assert_int_eq(pthread_create(&producer, NULL, direct_transaction_producer, space), 0);
+        int result;
+        if (consume)
+            result = linda_in_timed(space, "direct", "commit", "visible", NULL, 0, NULL, 0, NULL, 0, 500);
+        else
+            result = linda_rd_timed(space, "direct", "commit", "visible", NULL, 0, NULL, 0, NULL, 0, 500);
+        pthread_join(producer, NULL);
+        ck_assert_int_eq(result, LINDA_OK);
+        delete_linda_space(space);
+    }
+}
+END_TEST
+
 static void *slow_eval_worker(void *arg)
 {
     int *finished = (int *)arg;
@@ -480,6 +501,7 @@ Suite *linda_suite(void)
     tcase_add_test(tc_core, test_linda_reusable_pattern);
     tcase_add_test(tc_core, test_linda_wakes_after_direct_database_commit);
     tcase_add_test(tc_core, test_linda_notification_survives_public_observer_registration);
+    tcase_add_test(tc_core, test_linda_wakes_when_derived_tuple_becomes_asserted);
     tcase_add_test(tc_core, test_linda_delete_waits_for_eval_workers);
     tcase_add_test(tc_core, test_linda_parallel_producers_and_consumers);
     tcase_add_test(tc_core, test_linda_parallel_duplicate_multiplicity);

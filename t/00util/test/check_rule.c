@@ -195,6 +195,26 @@ START_TEST(test_rule_stratification_failure)
 }
 END_TEST
 
+START_TEST(test_variable_predicate_stratification)
+{
+    s_datalog_program *program = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?y ?p ?x :- ?x ?p ?y ."), 0);
+    int count = 0;
+    int *strata = datalog_program_stratify(program, &count);
+    ck_assert(strata);
+    ck_assert_int_eq(count, 1);
+    free(strata);
+    delete_datalog_program(program);
+
+    program = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?x ?p yes :- ?x wants ?p, NOT(?x blocked yes) ."), 0);
+    strata = datalog_program_stratify(program, &count);
+    ck_assert_ptr_eq(strata, NULL);
+    ck_assert_int_eq(count, 0);
+    delete_datalog_program(program);
+}
+END_TEST
+
 Suite *rule_suite(void)
 {
     Suite *s;
@@ -213,6 +233,8 @@ Suite *rule_suite(void)
     tcase_add_test(tc_core, test_rule_stratification_success);
     tcase_add_test(tc_core, test_rule_stratification_negation_success);
     tcase_add_test(tc_core, test_rule_stratification_failure);
+
+    tcase_add_test(tc_core, test_variable_predicate_stratification);
 
     suite_add_tcase(s, tc_core);
     return s;

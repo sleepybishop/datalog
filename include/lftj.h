@@ -15,6 +15,7 @@ typedef struct lftj_iterator {
     struct rax *symbols;
     raxIterator it;
     int depth; /* 0, 1, 2, 3 */
+    int error; /* allocation/iteration failure */
     int col1, col2, col3;
     Symbol val1;
     Symbol val2;
@@ -30,7 +31,7 @@ int iterator_seek(s_lftj_iterator *it, Symbol key);
 int iterator_open(s_lftj_iterator *it);
 int iterator_up(s_lftj_iterator *it);
 
-/* Leapfrog Triejoin Solver */
+/* leapfrog triejoin solver: solution count, or -1 on failure. */
 int facts_lftj_solve(struct facts *facts, p_spec spec, s_binding *bindings);
 int facts_lftj_solve_multi(struct facts *facts, struct facts **dbs, p_spec spec, s_binding *bindings,
                            void (*cb)(s_binding *bindings, void *user_data), void *user_data);

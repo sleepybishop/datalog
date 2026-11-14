@@ -83,6 +83,7 @@ int transaction_begin(s_facts *facts, s_transaction *tx)
     tx->owner = self;
     tx->owner_valid = 1;
     tx->level = 1;
+    tx->io_error = 0;
     pthread_mutex_unlock(&tx->state_mutex);
     return 0;
 }
@@ -119,6 +120,10 @@ static int transaction_commit_impl(s_facts *facts, s_transaction *tx, int suppre
         void *summary_observer_data;
         f_facts_commit_summary_observer internal_summary_observer;
         void *internal_summary_observer_data;
+        if (tx->io_error) {
+            transaction_rollback(facts, tx);
+            return -1;
+        }
         if (!suppress_listener && (internal_listener || listener) && tx->rollback.size > 0) {
             size_t entry_count = tx->rollback.size;
             s_rollback_entry *entries = malloc(entry_count * sizeof(*entries));
@@ -133,21 +138,23 @@ static int transaction_commit_impl(s_facts *facts, s_transaction *tx, int suppre
             if (listener_result == 0 && listener)
                 listener_result = listener(facts, entries, entry_count, listener_data);
             free(entries);
-            if (listener_result != 0) {
+            if (listener_result != 0 || tx->io_error) {
                 transaction_rollback(facts, tx);
                 return -1;
             }
         }
         facts_justifications_commit(facts);
         for (size_t i = 0; i < tx->rollback.size; i++) {
+            /* support-only changes can make a derived tuple visible to Linda. */
+            unsigned int partition = facts_commit_subject_partition(symbol_to_str(tx->rollback.entries[i].fact.s));
+            changed = 1;
+            summary.subject_partitions |= UINT64_C(1);
+            summary.subject_partitions |= UINT64_C(1) << partition;
             if (tx->rollback.entries[i].action != ROLLBACK_STATE) {
-                unsigned int partition = facts_commit_subject_partition(symbol_to_str(tx->rollback.entries[i].fact.s));
-                changed = 1;
                 summary.physical_changes++;
-                summary.subject_partitions |= UINT64_C(1);
-                summary.subject_partitions |= UINT64_C(1) << partition;
             }
         }
+        facts_reclaim_retired(facts);
         for (size_t i = 0; i < tx->rollback.size; i++) {
             facts_unintern(facts, tx->rollback.entries[i].fact.s);
             facts_unintern(facts, tx->rollback.entries[i].fact.p);
@@ -210,6 +217,10 @@ int transaction_rollback(s_facts *facts, s_transaction *tx)
         facts_unintern(facts, entry.fact.o);
     }
 
+    if (level == 1)
+        facts_reclaim_retired(facts);
+    int io_error = tx->io_error;
+
     pthread_mutex_lock(&tx->state_mutex);
     if (level > 1) {
         tx->level = level - 1;
@@ -217,11 +228,12 @@ int transaction_rollback(s_facts *facts, s_transaction *tx)
         return 0;
     }
     tx->level = 0;
+    tx->io_error = 0;
     memset(&tx->owner, 0, sizeof(pthread_t));
     tx->owner_valid = 0;
     pthread_mutex_unlock(&tx->state_mutex);
     pthread_rwlock_unlock(&tx->rwlock);
-    return 0;
+    return io_error ? -1 : 0;
 }
 
 int transaction_rollback_push(s_facts *facts, s_transaction *tx, e_rollback_action action, const s_fact *fact)

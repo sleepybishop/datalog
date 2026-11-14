@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,7 @@ void init_lftj_iterator(s_lftj_iterator *it, struct rax *symbols, int col1, int 
 {
     it->symbols = symbols;
     it->depth = 0;
+    it->error = 0;
     it->col1 = col1;
     it->col2 = col2;
     it->col3 = col3;
@@ -60,13 +62,49 @@ Symbol iterator_key(s_lftj_iterator *it)
     return NULL;
 }
 
+static int iterator_skip_removed(s_lftj_iterator *it)
+{
+    while (!raxEOF(&it->it)) {
+        s_fact *fact = it->it.data;
+        if (fact->asserted_count || fact->derived_count)
+            return 1;
+        it->it.flags &= ~RAX_ITER_JUST_SEEKED;
+        if (!raxNext(&it->it) && errno == ENOMEM) {
+            it->error = 1;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int iterator_rax_seek(s_lftj_iterator *it, const char *op, unsigned char *key, size_t len)
+{
+    if (!raxSeek(&it->it, op, key, len)) {
+        it->error = 1;
+        return 0;
+    }
+    return iterator_skip_removed(it);
+}
+
+static int iterator_rax_next(s_lftj_iterator *it)
+{
+    if (!raxNext(&it->it) && errno == ENOMEM) {
+        it->error = 1;
+        return 0;
+    }
+    return iterator_skip_removed(it);
+}
+
 int iterator_open(s_lftj_iterator *it)
 {
     unsigned char query_key[24];
     memset(query_key, 0, 24);
 
     if (it->depth == 0) {
-        raxSeek(&it->it, "^", NULL, 0);
+        if (!iterator_rax_seek(it, "^", NULL, 0)) {
+            it->error = 1;
+            return -1;
+        }
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -76,7 +114,10 @@ int iterator_open(s_lftj_iterator *it)
     }
     if (it->depth == 1) {
         encode_uint64_be(query_key, get_symbol_id(it->val1));
-        raxSeek(&it->it, ">=", query_key, 24);
+        if (!iterator_rax_seek(it, ">=", query_key, 24)) {
+            it->error = 1;
+            return -1;
+        }
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -88,7 +129,10 @@ int iterator_open(s_lftj_iterator *it)
     } else if (it->depth == 2) {
         encode_uint64_be(query_key, get_symbol_id(it->val1));
         encode_uint64_be(query_key + 8, get_symbol_id(it->val2));
-        raxSeek(&it->it, ">=", query_key, 24);
+        if (!iterator_rax_seek(it, ">=", query_key, 24)) {
+            it->error = 1;
+            return -1;
+        }
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -117,7 +161,10 @@ int iterator_seek(s_lftj_iterator *it, Symbol key)
 
     if (it->depth == 1) {
         encode_uint64_be(query_key, get_symbol_id(key));
-        raxSeek(&it->it, ">=", query_key, 24);
+        if (!iterator_rax_seek(it, ">=", query_key, 24)) {
+            it->error = 1;
+            return -1;
+        }
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -126,7 +173,10 @@ int iterator_seek(s_lftj_iterator *it, Symbol key)
     } else if (it->depth == 2) {
         encode_uint64_be(query_key, get_symbol_id(it->val1));
         encode_uint64_be(query_key + 8, get_symbol_id(key));
-        raxSeek(&it->it, ">=", query_key, 24);
+        if (!iterator_rax_seek(it, ">=", query_key, 24)) {
+            it->error = 1;
+            return -1;
+        }
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -138,7 +188,10 @@ int iterator_seek(s_lftj_iterator *it, Symbol key)
         encode_uint64_be(query_key, get_symbol_id(it->val1));
         encode_uint64_be(query_key + 8, get_symbol_id(it->val2));
         encode_uint64_be(query_key + 16, get_symbol_id(key));
-        raxSeek(&it->it, ">=", query_key, 24);
+        if (!iterator_rax_seek(it, ">=", query_key, 24)) {
+            it->error = 1;
+            return -1;
+        }
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -163,7 +216,10 @@ int iterator_next(s_lftj_iterator *it)
                 return 0;
             }
             it->it.flags &= ~RAX_ITER_JUST_SEEKED;
-            raxNext(&it->it);
+            if (!iterator_rax_next(it)) {
+                it->error = 1;
+                return -1;
+            }
         }
     } else if (it->depth == 2) {
         while (1) {
@@ -178,11 +234,17 @@ int iterator_next(s_lftj_iterator *it)
                 return 0;
             }
             it->it.flags &= ~RAX_ITER_JUST_SEEKED;
-            raxNext(&it->it);
+            if (!iterator_rax_next(it)) {
+                it->error = 1;
+                return -1;
+            }
         }
     } else if (it->depth == 3) {
         it->it.flags &= ~RAX_ITER_JUST_SEEKED;
-        raxNext(&it->it);
+        if (!iterator_rax_next(it)) {
+            it->error = 1;
+            return -1;
+        }
         if (raxEOF(&it->it))
             return -1;
         s_fact *f = it->it.data;
@@ -264,13 +326,17 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
     const char *var_name = (var_idx < vars_count) ? vars[var_idx] : NULL;
     const char **bound_slot = var_name ? bindings_get(bindings, var_name) : NULL;
 
+    if (var_name && !bound_slot)
+        return -1;
+    const char *previous_binding = bound_slot ? *bound_slot : NULL;
+
     s_lftj_iterator **active_iters = malloc((size_t)subgoal_count * sizeof(*active_iters));
     int active_count = 0;
     int *opened_levels = calloc((size_t)subgoal_count, sizeof(*opened_levels));
     if (!active_iters || !opened_levels) {
         free(active_iters);
         free(opened_levels);
-        return 0;
+        return -1;
     }
 
     for (int i = 0; i < subgoal_count; i++) {
@@ -287,19 +353,14 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
                 bound_sym = get_bound_var_sym(facts, val_var, bindings);
             }
 
-            if (val_var == NULL) { /* constant */
-                int r1 = iterator_open(it);
-                int r2 = r1 == 0 ? iterator_seek(it, val_sym) : -1;
-                Symbol k = iterator_key(it);
-                if (r1 != 0 || r2 != 0 || k != val_sym) {
+            if (val_var == NULL || bound_sym != NULL) {
+                if (iterator_open(it) != 0)
                     goto backtrack_temp;
-                }
+                /* opening changes depth even when the following seek misses. */
                 opened_levels[i]++;
-            } else if (bound_sym != NULL) { /* already bound variable -> treat as constant */
-                if (iterator_open(it) != 0 || iterator_seek(it, bound_sym) != 0 || iterator_key(it) != bound_sym) {
+                Symbol target = val_var ? bound_sym : val_sym;
+                if (iterator_seek(it, target) != 0 || iterator_key(it) != target)
                     goto backtrack_temp;
-                }
-                opened_levels[i]++;
             } else if (var_name && strcmp(val_var, var_name) == 0) {
                 if (iterator_open(it) != 0) {
                     goto backtrack_temp;
@@ -322,6 +383,10 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
         }
         free(active_iters);
         free(opened_levels);
+        for (int k = 0; k < subgoal_count; k++) {
+            if (iterators[k]->error)
+                return -1;
+        }
         return 0;
     }
 
@@ -346,8 +411,13 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
         while (match_val) {
             *bound_slot = symbol_to_str(match_val);
 
-            found_solutions += lftj_solve_rec(facts, subgoals, bindings, var_idx + 1, vars, vars_count, iterators, subgoal_count,
-                                              iterator_cols, cb, user_data);
+            int child_solutions = lftj_solve_rec(facts, subgoals, bindings, var_idx + 1, vars, vars_count, iterators, subgoal_count,
+                                                 iterator_cols, cb, user_data);
+            if (child_solutions < 0 || found_solutions > INT_MAX - child_solutions) {
+                found_solutions = -1;
+                break;
+            }
+            found_solutions += child_solutions;
 
             if (iterator_next(active_iters[0]) < 0) {
                 break;
@@ -365,7 +435,11 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
             opened_levels[i]--;
         }
     }
-    *bound_slot = NULL;
+    *bound_slot = previous_binding;
+    for (int i = 0; i < subgoal_count; i++) {
+        if (iterators[i]->error)
+            found_solutions = -1;
+    }
     free(active_iters);
     free(opened_levels);
     return found_solutions;
@@ -550,7 +624,7 @@ static int naive_solve_rec(s_multi_subgoal *subgoals, unsigned char *visited, in
         if (visited[i])
             continue;
         s_multi_subgoal *cand = &subgoals[i];
-        uint64_t db_size = raxSize(cand->db->index_spo);
+        uint64_t db_size = cand->db->index.count - cand->db->retired_count;
         int bound_terms = 0;
         for (int t = 0; t < 3; t++) {
             if (cand->slots[t]) {
@@ -588,9 +662,9 @@ static int naive_solve_rec(s_multi_subgoal *subgoals, unsigned char *visited, in
 
     s_facts_cursor fc;
     const char *cursor_s = NULL, *cursor_p = NULL, *cursor_o = NULL;
-    const char **var_s = s_val && s_val[0] == '?' ? &cursor_s : NULL;
-    const char **var_p = p_val && p_val[0] == '?' ? &cursor_p : NULL;
-    const char **var_o = o_val && o_val[0] == '?' ? &cursor_o : NULL;
+    const char **var_s = sub->slots[0] && !*sub->slots[0] ? &cursor_s : NULL;
+    const char **var_p = sub->slots[1] && !*sub->slots[1] ? &cursor_p : NULL;
+    const char **var_o = sub->slots[2] && !*sub->slots[2] ? &cursor_o : NULL;
     if (var_s || var_p || var_o)
         facts_with_1_2(db, &fc, s_val, p_val, o_val, var_s, var_p, var_o);
     else
@@ -620,12 +694,21 @@ static int naive_solve_rec(s_multi_subgoal *subgoals, unsigned char *visited, in
             }
         }
 
-        if (compatible)
-            solutions += naive_solve_rec(subgoals, visited, subgoal_count, remaining - 1, bindings, cb, user_data);
+        if (compatible) {
+            int child_solutions = naive_solve_rec(subgoals, visited, subgoal_count, remaining - 1, bindings, cb, user_data);
+            if (child_solutions < 0 || solutions > INT_MAX - child_solutions)
+                solutions = -1;
+            else
+                solutions += child_solutions;
+        }
 
         for (int i = 0; i < changed_count; i++)
             *changed_slots[i] = NULL;
+        if (solutions < 0)
+            break;
     }
+    if (facts_cursor_error(&fc))
+        solutions = -1;
     facts_cursor_stop(&fc);
     visited[best_idx] = 0;
     return solutions;
@@ -635,14 +718,18 @@ int facts_lftj_solve_multi(s_facts *facts, s_facts **dbs, p_spec spec, s_binding
                            void (*cb)(s_binding *bindings, void *user_data), void *user_data)
 {
     size_t subgoal_count_sz = spec_count_facts(spec);
-    if (subgoal_count_sz == 0 || subgoal_count_sz > INT_MAX)
+    if (subgoal_count_sz == 0)
         return 0;
+    if (subgoal_count_sz > INT_MAX)
+        return -1;
     int subgoal_count = (int)subgoal_count_sz;
 
     s_spec_fact *raw_subgoals = (s_spec_fact *)spec;
     for (int i = 0; i < subgoal_count; i++) {
         s_facts *db = (dbs && dbs[i]) ? dbs[i] : facts;
-        if (!db || raxSize(db->index_spo) == 0)
+        if (!db)
+            return -1;
+        if (db->index.count - db->retired_count == 0)
             return 0;
     }
 
@@ -655,7 +742,7 @@ int facts_lftj_solve_multi(s_facts *facts, s_facts **dbs, p_spec spec, s_binding
             free(subgoals);
         if (visited != stack_visited)
             free(visited);
-        return 0;
+        return -1;
     }
     if (subgoal_count <= 16)
         memset(stack_visited, 0, (size_t)subgoal_count);

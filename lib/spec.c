@@ -28,6 +28,46 @@ size_t spec_count_facts(p_spec spec)
     return count;
 }
 
+p_spec spec_copy_expanded(const s_spec_fact *triples, size_t count)
+{
+    if (count && !triples)
+        return NULL;
+    if (count > (SIZE_MAX / sizeof(const char *) - 2) / 4)
+        return NULL;
+    size_t ptr_bytes = (count * 4 + 2) * sizeof(const char *);
+    size_t total = ptr_bytes;
+    for (size_t i = 0; i < count; i++) {
+        const char *terms[] = {triples[i].s, triples[i].p, triples[i].o, triples[i].negated};
+        for (size_t t = 0; t < 4; t++) {
+            if (!terms[t]) {
+                if (t < 3)
+                    return NULL;
+                continue;
+            }
+            size_t len = strlen(terms[t]) + 1;
+            if (len > SIZE_MAX - total)
+                return NULL;
+            total += len;
+        }
+    }
+    p_spec copy = calloc(1, total);
+    if (!copy)
+        return NULL;
+    char *dst = (char *)copy + ptr_bytes;
+    for (size_t i = 0; i < count; i++) {
+        const char *terms[] = {triples[i].s, triples[i].p, triples[i].o, triples[i].negated};
+        for (size_t t = 0; t < 4; t++) {
+            if (!terms[t])
+                continue;
+            size_t len = strlen(terms[t]) + 1;
+            memcpy(dst, terms[t], len);
+            copy[i * 4 + t] = dst;
+            dst += len;
+        }
+    }
+    return copy;
+}
+
 /* calls malloc to return a new p_spec */
 p_spec spec_expand(p_spec spec)
 {
@@ -244,6 +284,52 @@ s_binding *spec_bindings(p_spec spec)
             v++;
         }
         spec++;
+    }
+    return bindings;
+}
+
+s_binding *spec_bindings_typed(const s_spec_fact *triples, const unsigned char *variable_masks, size_t count)
+{
+    if (count && (!triples || !variable_masks))
+        return NULL;
+    size_t vars_count = 0;
+    size_t str_bytes = 0;
+    for (size_t i = 0; i < count; i++) {
+        const char *terms[] = {triples[i].s, triples[i].p, triples[i].o};
+        for (size_t t = 0; t < 3; t++) {
+            if (!(variable_masks[i] & (1u << t)))
+                continue;
+            size_t len = strlen(terms[t]) + 1;
+            if (vars_count == SIZE_MAX || len > SIZE_MAX - str_bytes)
+                return NULL;
+            vars_count++;
+            str_bytes += len;
+        }
+    }
+    if (vars_count > (SIZE_MAX - sizeof(s_binding)) / (sizeof(s_binding) + sizeof(char *)))
+        return NULL;
+    size_t bindings_bytes = (vars_count + 1) * sizeof(s_binding);
+    size_t ptr_bytes = bindings_bytes + vars_count * sizeof(char *);
+    if (str_bytes > SIZE_MAX - ptr_bytes)
+        return NULL;
+    s_binding *bindings = calloc(1, ptr_bytes + str_bytes);
+    if (!bindings)
+        return NULL;
+    const char **values = (const char **)((char *)bindings + bindings_bytes);
+    char *dst = (char *)bindings + ptr_bytes;
+    size_t idx = 0;
+    for (size_t i = 0; i < count; i++) {
+        const char *terms[] = {triples[i].s, triples[i].p, triples[i].o};
+        for (size_t t = 0; t < 3; t++) {
+            if (!(variable_masks[i] & (1u << t)))
+                continue;
+            size_t len = strlen(terms[t]) + 1;
+            memcpy(dst, terms[t], len);
+            bindings[idx].name = dst;
+            bindings[idx].value = values + idx;
+            dst += len;
+            idx++;
+        }
     }
     return bindings;
 }

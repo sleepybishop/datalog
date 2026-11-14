@@ -27,6 +27,8 @@ t/00util/test/check_skiplist
 t/00util/test/check_spec
 t/00util/test/check_eval
 t/00util/test/check_intern
+t/00util/test/check_io
+t/00util/test/check_storage_failures
 t/00util/test/check_magic
 t/00util/test/check_movie_integration
 t/00util/test/check_rule

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <assert.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -168,6 +169,12 @@ static int list_contains(const char **list, size_t count, const char *var)
 int datalog_rule_validate(const s_datalog_rule *rule)
 {
     assert(rule);
+    if (!rule->head.s || !rule->head.p || !rule->head.o || (rule->body_count && !rule->body))
+        return 0;
+    for (size_t i = 0; i < rule->body_count; i++) {
+        if (!rule->body[i].s || !rule->body[i].p || !rule->body[i].o)
+            return 0;
+    }
 
     const char **pos_vars = NULL;
     size_t pos_vars_count = 0;
@@ -617,36 +624,12 @@ parse_error:
     return -1;
 }
 
-static int add_pred_to_list(const char ***list, size_t *count, const char *pred)
+/* variable predicates may denote any relation; treat every possible match
+ * as a dependency, including matches between rule heads, so a dynamic head
+ * cannot bypass a negative cycle or produce facts in an earlier stratum. */
+static int predicates_overlap(const char *a, const char *b)
 {
-    if (!pred)
-        return 0;
-    for (size_t i = 0; i < *count; i++) {
-        if (strcmp((*list)[i], pred) == 0) {
-            return 0;
-        }
-    }
-    if (*count == SIZE_MAX / sizeof(char *))
-        return -1;
-    const char **new_list = realloc(*list, (*count + 1) * sizeof(char *));
-    if (!new_list)
-        return -1;
-    *list = new_list;
-    (*list)[*count] = pred;
-    (*count)++;
-    return 0;
-}
-
-static int find_pred_idx(const char **preds, size_t pred_count, const char *pred)
-{
-    if (!pred)
-        return -1;
-    for (size_t i = 0; i < pred_count; i++) {
-        if (strcmp(preds[i], pred) == 0) {
-            return (int)i;
-        }
-    }
-    return -1;
+    return is_variable(a) || is_variable(b) || strcmp(a, b) == 0;
 }
 
 int *datalog_program_stratify(const s_datalog_program *prog, int *num_strata_out)
@@ -654,107 +637,56 @@ int *datalog_program_stratify(const s_datalog_program *prog, int *num_strata_out
     assert(prog);
     assert(num_strata_out);
     *num_strata_out = 0;
-
-    if (prog->rule_count == 0) {
+    if (!prog->rule_count || prog->rule_count >= INT_MAX || prog->rule_count > SIZE_MAX / sizeof(int))
         return NULL;
+    for (size_t r = 0; r < prog->rule_count; r++) {
+        if (datalog_rule_validate(&prog->rules[r]) != 1)
+            return NULL;
     }
-
-    /* 1. Collect all unique constant predicates */
-    const char **preds = NULL;
-    size_t pred_count = 0;
-    for (size_t i = 0; i < prog->rule_count; i++) {
-        const s_datalog_rule *rule = &prog->rules[i];
-        if (rule->head.p && rule->head.p[0] != '?') {
-            if (add_pred_to_list(&preds, &pred_count, rule->head.p) != 0)
-                goto allocation_error;
-        }
-        for (size_t j = 0; j < rule->body_count; j++) {
-            const s_spec_fact *sub = &rule->body[j];
-            if (sub->p && sub->p[0] != '?') {
-                if (add_pred_to_list(&preds, &pred_count, sub->p) != 0)
-                    goto allocation_error;
-            }
-        }
-    }
-
-    if (pred_count == 0) {
+    int *strata = calloc(prog->rule_count, sizeof(*strata));
+    if (!strata)
         return NULL;
-    }
 
-    /* 2. Initialize stratum values to 0 for all predicates */
-    int *stratum = calloc(pred_count, sizeof(int));
-    if (!stratum)
-        goto allocation_error;
-
-    /* 3. Run fixed-point iteration for stratum propagation */
-    /* We run it pred_count + 1 times. If stratum values change in the last iteration,
-     * it means there is a cycle with negation, so the program is unstratified. */
-    int changed = 0;
-    for (size_t iter = 0; iter <= pred_count; iter++) {
-        changed = 0;
+    for (size_t iteration = 0; iteration <= prog->rule_count; iteration++) {
+        int changed = 0;
         for (size_t r = 0; r < prog->rule_count; r++) {
             const s_datalog_rule *rule = &prog->rules[r];
-            int head_idx = find_pred_idx(preds, pred_count, rule->head.p);
-            if (head_idx < 0)
-                continue;
-
-            for (size_t b = 0; b < rule->body_count; b++) {
-                const s_spec_fact *sub = &rule->body[b];
-                int sub_idx = find_pred_idx(preds, pred_count, sub->p);
-                if (sub_idx < 0)
-                    continue;
-
-                if (sub->negated == NULL) { /* Positive dependency */
-                    if (stratum[head_idx] < stratum[sub_idx]) {
-                        stratum[head_idx] = stratum[sub_idx];
-                        changed = 1;
-                    }
-                } else { /* Negative dependency */
-                    if (stratum[head_idx] <= stratum[sub_idx]) {
-                        stratum[head_idx] = stratum[sub_idx] + 1;
-                        changed = 1;
+            int required = strata[r];
+            for (size_t producer = 0; producer < prog->rule_count; producer++) {
+                const char *head_predicate = prog->rules[producer].head.p;
+                if (predicates_overlap(rule->head.p, head_predicate) && required < strata[producer])
+                    required = strata[producer];
+                for (size_t b = 0; b < rule->body_count; b++) {
+                    const s_spec_fact *body = &rule->body[b];
+                    int negative = body->negated != NULL;
+                    if (negative && required < 1)
+                        required = 1;
+                    if (predicates_overlap(body->p, head_predicate)) {
+                        int dependency = strata[producer] + negative;
+                        if (required < dependency)
+                            required = dependency;
                     }
                 }
             }
+            if ((size_t)required > prog->rule_count) {
+                free(strata);
+                return NULL;
+            }
+            if (strata[r] < required) {
+                strata[r] = required;
+                changed = 1;
+            }
         }
         if (!changed) {
-            break;
+            int max_stratum = 0;
+            for (size_t r = 0; r < prog->rule_count; r++) {
+                if (max_stratum < strata[r])
+                    max_stratum = strata[r];
+            }
+            *num_strata_out = max_stratum + 1;
+            return strata;
         }
     }
-
-    /* If it changed in the (pred_count)-th iteration, there is a negative cycle */
-    if (changed) {
-        free(stratum);
-        free(preds);
-        return NULL;
-    }
-
-    /* Determine the number of strata and rule strata mapping */
-    int max_stratum = 0;
-    int *rule_strata = malloc(prog->rule_count * sizeof(int));
-    if (!rule_strata) {
-        free(stratum);
-        free(preds);
-        return NULL;
-    }
-
-    for (size_t r = 0; r < prog->rule_count; r++) {
-        const s_datalog_rule *rule = &prog->rules[r];
-        int head_idx = find_pred_idx(preds, pred_count, rule->head.p);
-        int r_stratum = (head_idx >= 0) ? stratum[head_idx] : 0;
-        rule_strata[r] = r_stratum;
-        if (r_stratum > max_stratum) {
-            max_stratum = r_stratum;
-        }
-    }
-
-    *num_strata_out = max_stratum + 1;
-
-    free(stratum);
-    free(preds);
-    return rule_strata;
-
-allocation_error:
-    free(preds);
+    free(strata);
     return NULL;
 }

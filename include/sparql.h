@@ -3,6 +3,17 @@
 
 #include "facts.h"
 
+typedef enum {
+    SPARQL_STATEMENT_UNKNOWN,
+    SPARQL_STATEMENT_SELECT,
+    SPARQL_STATEMENT_ASK,
+    SPARQL_STATEMENT_INSERT,
+    SPARQL_STATEMENT_RULE
+} e_sparql_statement_kind;
+
+/* classify without interpreting syntax inside quoted strings or IRIs. */
+e_sparql_statement_kind sparql_statement_kind(const char *query);
+
 /*
  * Parse a basic SPARQL SELECT query string and execute it against facts.
  *

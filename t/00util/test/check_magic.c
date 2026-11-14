@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "magic.h"
+#include "eval.h"
+#include "facts.h"
 #include "rule.h"
 
 START_TEST(test_magic_sets_transformation)
@@ -74,6 +76,29 @@ START_TEST(test_magic_sets_negated_subgoal_does_not_bind_vars)
 }
 END_TEST
 
+START_TEST(test_magic_sets_recursive_query_preserves_seed)
+{
+    s_datalog_program *program = new_datalog_program();
+    ck_assert_int_eq(datalog_program_parse_rules(program, "?x path ?y :- ?x edge ?y . "
+                                                          "?x path ?y :- ?x edge ?z, ?z path ?y ."),
+                     0);
+    s_spec_fact goal = {"a", "path", "?y", NULL};
+    s_datalog_program *magic = datalog_program_magic_transform(program, &goal);
+    ck_assert(magic);
+    s_facts *facts = new_facts(NULL, 256);
+    ck_assert(facts_add_spo(facts, "a", "edge", "b"));
+    ck_assert(facts_add_spo(facts, "b", "edge", "c"));
+    ck_assert(facts_add_spo(facts, "unrelated", "edge", "other"));
+    ck_assert(facts_add_spo(facts, "a", "magic_path_bf", "true"));
+    ck_assert(facts_datalog_eval(facts, magic) > 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "a", "path_bf", "c"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "unrelated", "path_bf", "other"), 0);
+    delete_facts(facts);
+    delete_datalog_program(magic);
+    delete_datalog_program(program);
+}
+END_TEST
+
 Suite *magic_suite(void)
 {
     Suite *s;
@@ -85,6 +110,8 @@ Suite *magic_suite(void)
     tcase_add_test(tc_core, test_magic_sets_transformation);
     tcase_add_test(tc_core, test_magic_sets_rejects_invalid_goal);
     tcase_add_test(tc_core, test_magic_sets_negated_subgoal_does_not_bind_vars);
+
+    tcase_add_test(tc_core, test_magic_sets_recursive_query_preserves_seed);
 
     suite_add_tcase(s, tc_core);
     return s;

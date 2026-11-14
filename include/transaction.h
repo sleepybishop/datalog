@@ -34,6 +34,7 @@ typedef void (*f_facts_commit_summary_observer)(s_facts *facts, const s_facts_co
 
 typedef struct transaction {
     int level;
+    int io_error;
     size_t *savepoints;
     size_t savepoint_capacity;
     s_rollback_stack rollback;

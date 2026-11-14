@@ -1,3 +1,5 @@
+.DEFAULT_GOAL := all
+
 OBJ=\
 deps/rax/rax.o\
 lib/random.o\
@@ -26,6 +28,8 @@ TEST_UTILS=\
 t/00util/test/check_fact\
 t/00util/test/check_facts\
 t/00util/test/check_intern\
+t/00util/test/check_io\
+t/00util/test/check_storage_failures\
 t/00util/test/check_set\
 t/00util/test/check_spec\
 t/00util/test/check_triejoin\
@@ -88,6 +92,11 @@ t/00util/test/check_facts: t/00util/test/check_facts.o $(OBJ)
 
 t/00util/test/check_intern: t/00util/test/check_intern.o $(OBJ)
 
+t/00util/test/check_io: t/00util/test/check_io.o $(OBJ)
+
+t/00util/test/check_storage_failures: t/00util/test/check_storage_failures.o $(OBJ)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=pthread_rwlock_unlock -o $@ $^ $(LDLIBS)
+
 t/00util/test/check_set: t/00util/test/check_set.o $(OBJ)
 
 t/00util/test/check_spec: t/00util/test/check_spec.o $(OBJ)
@@ -108,7 +117,7 @@ t/00util/test/check_linda: t/00util/test/check_linda.o $(OBJ)
 
 
 check: CFLAGS=-O2 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread
-check: $(TEST_UTILS) $(BENCH_UTILS);
+check: $(TEST_UTILS) $(BENCH_UTILS) sparql_repl;
 	prove -I. -v t/*.t
 
 libdatalog.a: $(OBJ)
@@ -132,7 +141,8 @@ check-asan:
 	ASAN_OPTIONS=detect_leaks=0 $(MAKE) -B check CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
 
 check-tsan:
-	$(MAKE) -B t/00util/test/check_linda CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
+	$(MAKE) -B t/00util/test/check_linda t/00util/test/check_storage_failures CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
 	./t/00util/test/check_linda
+	./t/00util/test/check_storage_failures
 
 .PHONY: all check check-asan check-tsan clean indent scan

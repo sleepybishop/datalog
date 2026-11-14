@@ -211,6 +211,39 @@ START_TEST(test_lftj_solve_repeated_vars_and_trailing_constants)
 }
 END_TEST
 
+START_TEST(test_lftj_failed_bound_seek_restores_depth)
+{
+    s_facts *facts = new_facts(NULL, 100);
+    facts_add_spo(facts, "a", "edge", "b");
+    facts_add_spo(facts, "c", "edge", "a");
+    facts_add_spo(facts, "d", "edge", "d");
+    const char *spec[] = {"?x", "edge", "?x", NULL, NULL};
+    s_binding *bindings = spec_bindings(spec);
+    ck_assert_int_eq(1, facts_lftj_solve(facts, spec, bindings));
+    ck_assert_int_eq(1, facts_lftj_solve_multi(facts, NULL, spec, bindings, NULL, NULL));
+    free(bindings);
+    delete_facts(facts);
+}
+END_TEST
+
+START_TEST(test_lftj_ignores_transactionally_removed_facts)
+{
+    s_facts *facts = new_facts(NULL, 100);
+    facts_add_spo(facts, "a", "edge", "a");
+    facts_add_spo(facts, "b", "edge", "b");
+    const char *spec[] = {"?x", "edge", "?x", NULL, NULL};
+    s_binding *bindings = spec_bindings(spec);
+    ck_assert_int_eq(0, facts_transaction_begin(facts));
+    ck_assert_int_eq(1, facts_remove_spo(facts, "a", "edge", "a"));
+    ck_assert_int_eq(1, facts_lftj_solve(facts, spec, bindings));
+    ck_assert_int_eq(1, facts_lftj_solve_multi(facts, NULL, spec, bindings, NULL, NULL));
+    ck_assert_int_eq(0, facts_transaction_rollback(facts));
+    ck_assert_int_eq(2, facts_lftj_solve(facts, spec, bindings));
+    free(bindings);
+    delete_facts(facts);
+}
+END_TEST
+
 Suite *triejoin_suite(void)
 {
     Suite *s;
@@ -223,6 +256,8 @@ Suite *triejoin_suite(void)
     tcase_add_test(tc_core, test_lftj_more_than_32_subgoals);
     tcase_add_test(tc_core, test_hexastore_compaction);
     tcase_add_test(tc_core, test_lftj_solve_repeated_vars_and_trailing_constants);
+    tcase_add_test(tc_core, test_lftj_failed_bound_seek_restores_depth);
+    tcase_add_test(tc_core, test_lftj_ignores_transactionally_removed_facts);
     suite_add_tcase(s, tc_core);
     return s;
 }

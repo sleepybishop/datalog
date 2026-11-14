@@ -12,6 +12,13 @@
  * Returns -1 on error (e.g., if the program is unstratified).
  */
 int facts_datalog_eval(s_facts *facts, const s_datalog_program *prog);
+/*
+ * update the supplied program's closure after changes described by delta.
+ * deletion reconciliation owns derived tuples matching this program's heads;
+ * other derived tuples remain available as external inputs. combine programs
+ * with overlapping heads because derived support has no per-program identity.
+ * returns the number of newly derived facts, or -1 on error.
+ */
 int facts_datalog_eval_incremental(s_facts *facts, const s_datalog_program *prog, const struct rollback_entry *delta,
                                    size_t delta_count);
 int reactive_tx_listener(s_facts *facts, const struct rollback_entry *entries, size_t entry_count, void *user_data);

@@ -35,6 +35,9 @@ typedef struct spec_fact {
     const char *negated;
 } s_spec_fact;
 
+/* copy counted expanded triples, including literal :not subjects. */
+p_spec spec_copy_expanded(const s_spec_fact *triples, size_t count);
+
 typedef struct spec_cursor {
     p_spec spec;
     const char *s;
@@ -48,5 +51,6 @@ int spec_cursor_next(s_spec_cursor *c, s_spec_fact *f);
 int spec_fact_bindings_resolve(s_spec_fact *f, s_binding *bindings);
 
 s_binding *spec_bindings(p_spec spec);
+s_binding *spec_bindings_typed(const s_spec_fact *triples, const unsigned char *variable_masks, size_t count);
 
 #endif
