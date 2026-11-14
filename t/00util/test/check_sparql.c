@@ -360,7 +360,7 @@ START_TEST(test_sparql_rule_engine)
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
 
-    // 4. Query matching rules for Packet 2
+    /* 4. Query matching rules for Packet 2 */
     rc = facts_sparql(g_f, bindings, &c,
                       "SELECT ?rule ?action WHERE { "
                       "  ?rule <action> ?action . "
@@ -377,6 +377,34 @@ START_TEST(test_sparql_rule_engine)
     ck_assert_str_eq(action, "DROP");
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
+}
+END_TEST
+
+START_TEST(test_sparql_does_not_leak_symbols_or_break_escaped_quotes)
+{
+    s_facts_with_cursor c;
+    s_binding *bindings = NULL;
+
+    int rc = facts_sparql_eval(g_f, "SELECT ?never_interned_var WHERE { ?never_interned_var <missing_pred> \"missing_obj\" . }", &c,
+                               &bindings);
+    ck_assert_int_eq(rc, 0);
+    ck_assert(!facts_with_cursor_next(&c));
+    facts_with_cursor_destroy(&c);
+    free(bindings);
+
+    ck_assert(facts_find_symbol_str(g_f, "?never_interned_var") == NULL);
+    ck_assert(facts_find_symbol_str(g_f, "missing_pred") == NULL);
+    ck_assert(facts_find_symbol_str(g_f, "missing_obj") == NULL);
+
+    rc = facts_sparql_insert(g_f, "INSERT DATA { <quote_node> <label> \"hello \\\"world\\\"\" . }");
+    ck_assert_int_eq(rc, 1);
+    ck_assert_int_eq(facts_contains_spo(g_f, "quote_node", "label", "hello \"world\""), 1);
+
+    rc = facts_sparql_eval(g_f, "ASK WHERE { <quote_node> <label> \"hello \\\"world\\\"\" . }", &c, &bindings);
+    ck_assert_int_eq(rc, 0);
+    ck_assert(facts_with_cursor_next(&c));
+    facts_with_cursor_destroy(&c);
+    free(bindings);
 }
 END_TEST
 
@@ -398,6 +426,7 @@ Suite *sparql_suite(void)
     tcase_add_test(tc_core, test_sparql_ask);
     tcase_add_test(tc_core, test_sparql_orderby);
     tcase_add_test(tc_core, test_sparql_rule_engine);
+    tcase_add_test(tc_core, test_sparql_does_not_leak_symbols_or_break_escaped_quotes);
     suite_add_tcase(s, tc_core);
     return s;
 }

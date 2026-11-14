@@ -18,30 +18,9 @@ int transaction_init_checked(s_transaction *tx)
     if (!tx)
         return -1;
     memset(tx, 0, sizeof(*tx));
-    tx->level = 0;
-    tx->rollback.entries = NULL;
-    tx->rollback.capacity = 0;
-    tx->rollback.size = 0;
     if (pthread_rwlock_init(&tx->rwlock, NULL) != 0)
         return -1;
     if (pthread_mutex_init(&tx->state_mutex, NULL) != 0) {
-        pthread_rwlock_destroy(&tx->rwlock);
-        return -1;
-    }
-    memset(&tx->owner, 0, sizeof(pthread_t));
-    tx->owner_valid = 0;
-    tx->listener = NULL;
-    tx->listener_data = NULL;
-    tx->internal_listener = NULL;
-    tx->internal_listener_data = NULL;
-    tx->commit_observer = NULL;
-    tx->commit_observer_data = NULL;
-    tx->commit_summary_observer = NULL;
-    tx->commit_summary_observer_data = NULL;
-    tx->internal_commit_summary_observer = NULL;
-    tx->internal_commit_summary_observer_data = NULL;
-    if (urcu_init_checked(&tx->rcu, 256) != 0) {
-        pthread_mutex_destroy(&tx->state_mutex);
         pthread_rwlock_destroy(&tx->rwlock);
         return -1;
     }
@@ -58,11 +37,13 @@ void transaction_destroy(s_transaction *tx)
     assert(tx->rollback.size == 0);
     pthread_rwlock_destroy(&tx->rwlock);
     pthread_mutex_destroy(&tx->state_mutex);
+    free(tx->savepoints);
+    tx->savepoints = NULL;
+    tx->savepoint_capacity = 0;
     free(tx->rollback.entries);
     tx->rollback.entries = NULL;
     tx->rollback.capacity = 0;
     tx->rollback.size = 0;
-    urcu_destroy(&tx->rcu);
 }
 
 int transaction_begin(s_facts *facts, s_transaction *tx)
@@ -72,6 +53,26 @@ int transaction_begin(s_facts *facts, s_transaction *tx)
     pthread_t self = pthread_self();
     pthread_mutex_lock(&tx->state_mutex);
     if (tx->owner_valid && pthread_equal(tx->owner, self)) {
+        if (tx->level > 0) {
+            size_t idx = (size_t)(tx->level - 1);
+            if (idx >= tx->savepoint_capacity) {
+                size_t new_cap = tx->savepoint_capacity ? tx->savepoint_capacity * 2 : 8;
+                if (new_cap <= idx)
+                    new_cap = idx + 1;
+                if (new_cap > SIZE_MAX / sizeof(*tx->savepoints)) {
+                    pthread_mutex_unlock(&tx->state_mutex);
+                    return -1;
+                }
+                size_t *new_savepoints = realloc(tx->savepoints, new_cap * sizeof(*tx->savepoints));
+                if (!new_savepoints) {
+                    pthread_mutex_unlock(&tx->state_mutex);
+                    return -1;
+                }
+                tx->savepoints = new_savepoints;
+                tx->savepoint_capacity = new_cap;
+            }
+            tx->savepoints[idx] = tx->rollback.size;
+        }
         tx->level++;
         pthread_mutex_unlock(&tx->state_mutex);
         return 0;
@@ -153,7 +154,6 @@ static int transaction_commit_impl(s_facts *facts, s_transaction *tx, int suppre
             facts_unintern(facts, tx->rollback.entries[i].fact.o);
         }
         tx->rollback.size = 0;
-        urcu_gc(&tx->rcu);
         pthread_mutex_lock(&tx->state_mutex);
         tx->level = 0;
         observer = tx->commit_observer;
@@ -195,16 +195,27 @@ int transaction_rollback(s_facts *facts, s_transaction *tx)
         pthread_mutex_unlock(&tx->state_mutex);
         return -1;
     }
+    int level = tx->level;
+    size_t target_size = (level > 1) ? tx->savepoints[level - 2] : 0;
     pthread_mutex_unlock(&tx->state_mutex);
-    facts_justifications_discard(facts);
-    while (tx->rollback.size > 0) {
+
+    if (level == 1)
+        facts_justifications_discard(facts);
+
+    while (tx->rollback.size > target_size) {
         s_rollback_entry entry = tx->rollback.entries[--tx->rollback.size];
         facts_apply_rollback_entry(facts, &entry);
         facts_unintern(facts, entry.fact.s);
         facts_unintern(facts, entry.fact.p);
         facts_unintern(facts, entry.fact.o);
     }
+
     pthread_mutex_lock(&tx->state_mutex);
+    if (level > 1) {
+        tx->level = level - 1;
+        pthread_mutex_unlock(&tx->state_mutex);
+        return 0;
+    }
     tx->level = 0;
     memset(&tx->owner, 0, sizeof(pthread_t));
     tx->owner_valid = 0;
@@ -282,8 +293,8 @@ int transaction_writer_owned(s_transaction *tx)
 }
 
 /*
- * A query cursor may hold a read lock while helper lookups acquire another read
- * section.  Recursively calling pthread_rwlock_rdlock is not portable and can
+ * a query cursor may hold a read lock while helper lookups acquire another read
+ * section. recursively calling pthread_rwlock_rdlock is not portable and can
  * deadlock when a writer is waiting, so track read nesting per thread/DB.
  */
 typedef struct transaction_reader_slot {
@@ -309,7 +320,7 @@ int transaction_acquire_reader(s_transaction *tx)
             empty = &reader_slots[i];
     }
 
-    /* More than 64 databases locked by one thread is a programming error. */
+    /* more than 64 databases locked by one thread is a programming error. */
     if (!empty)
         abort();
     pthread_rwlock_rdlock(&tx->rwlock);

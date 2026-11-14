@@ -14,27 +14,6 @@ static int compare_val(Symbol va, Symbol vb)
     return compare_symbol(va, vb);
 }
 
-static inline uint64_t get_symbol_id(Symbol ptr)
-{
-    if (ptr == P_FIRST)
-        return 0;
-    if (ptr == P_LAST)
-        return 0xFFFFFFFFFFFFFFFFULL;
-    return ptr->id;
-}
-
-static inline void encode_uint64_be(unsigned char *buf, uint64_t val)
-{
-    buf[0] = (val >> 56) & 0xFF;
-    buf[1] = (val >> 48) & 0xFF;
-    buf[2] = (val >> 40) & 0xFF;
-    buf[3] = (val >> 32) & 0xFF;
-    buf[4] = (val >> 24) & 0xFF;
-    buf[5] = (val >> 16) & 0xFF;
-    buf[6] = (val >> 8) & 0xFF;
-    buf[7] = val & 0xFF;
-}
-
 static inline Symbol fact_get_col(s_fact *f, int col)
 {
     return (col == 0) ? f->s : ((col == 1) ? f->p : f->o);
@@ -277,20 +256,13 @@ static Symbol get_bound_var_sym(s_facts *facts, const char *var_name, s_binding 
     return NULL;
 }
 
-/* Recursive Leapfrog solver */
+/* recursive leapfrog solver */
 static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *bindings, int var_idx, const char **vars,
                           int vars_count, s_lftj_iterator **iterators, int subgoal_count, int iterator_cols[][3],
                           void (*cb)(s_binding *bindings, void *user_data), void *user_data)
 {
-    if (var_idx == vars_count) {
-        if (cb) {
-            cb(bindings, user_data);
-        }
-        return 1;
-    }
-
-    const char *var_name = vars[var_idx];
-    const char **bound_slot = bindings_get(bindings, var_name);
+    const char *var_name = (var_idx < vars_count) ? vars[var_idx] : NULL;
+    const char **bound_slot = var_name ? bindings_get(bindings, var_name) : NULL;
 
     s_lftj_iterator **active_iters = malloc((size_t)subgoal_count * sizeof(*active_iters));
     int active_count = 0;
@@ -315,7 +287,7 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
                 bound_sym = get_bound_var_sym(facts, val_var, bindings);
             }
 
-            if (val_var == NULL) { /* Constant */
+            if (val_var == NULL) { /* constant */
                 int r1 = iterator_open(it);
                 int r2 = r1 == 0 ? iterator_seek(it, val_sym) : -1;
                 Symbol k = iterator_key(it);
@@ -323,12 +295,12 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
                     goto backtrack_temp;
                 }
                 opened_levels[i]++;
-            } else if (bound_sym != NULL) { /* Already bound variable -> treat as constant */
+            } else if (bound_sym != NULL) { /* already bound variable -> treat as constant */
                 if (iterator_open(it) != 0 || iterator_seek(it, bound_sym) != 0 || iterator_key(it) != bound_sym) {
                     goto backtrack_temp;
                 }
                 opened_levels[i]++;
-            } else if (strcmp(val_var, var_name) == 0) {
+            } else if (var_name && strcmp(val_var, var_name) == 0) {
                 if (iterator_open(it) != 0) {
                     goto backtrack_temp;
                 }
@@ -351,6 +323,21 @@ static int lftj_solve_rec(s_facts *facts, s_lftj_subgoal *subgoals, s_binding *b
         free(active_iters);
         free(opened_levels);
         return 0;
+    }
+
+    if (var_idx == vars_count) {
+        if (cb) {
+            cb(bindings, user_data);
+        }
+        for (int i = 0; i < subgoal_count; i++) {
+            while (opened_levels[i] > 0) {
+                iterator_up(iterators[i]);
+                opened_levels[i]--;
+            }
+        }
+        free(active_iters);
+        free(opened_levels);
+        return 1;
     }
 
     int found_solutions = 0;
@@ -514,7 +501,8 @@ int facts_lftj_solve(s_facts *facts, p_spec spec, s_binding *bindings)
         }
 
         if (best_cand == -1) {
-            best_cand = 0;
+            solutions = facts_lftj_solve_multi(facts, NULL, spec, bindings, NULL, NULL);
+            goto cleanup;
         }
 
         struct rax *t = (best_cand == 0) ? facts->hexastore->trie_spo
@@ -541,29 +529,62 @@ cleanup:
     return solutions;
 }
 
-static int naive_solve_rec(s_facts *main_facts, s_facts **dbs, s_spec_fact *subgoals, int subgoal_count, int current_subgoal,
-                           s_binding *bindings, void (*cb)(s_binding *bindings, void *user_data), void *user_data)
+typedef struct multi_subgoal {
+    s_facts *db;
+    const char *terms[3];
+    const char **slots[3];
+} s_multi_subgoal;
+
+static int naive_solve_rec(s_multi_subgoal *subgoals, unsigned char *visited, int subgoal_count, int remaining, s_binding *bindings,
+                           void (*cb)(s_binding *bindings, void *user_data), void *user_data)
 {
-    if (current_subgoal == subgoal_count) {
+    if (remaining == 0) {
         if (cb)
             cb(bindings, user_data);
         return 1;
     }
-    s_spec_fact *sub = &subgoals[current_subgoal];
-    s_facts *db = dbs[current_subgoal] ? dbs[current_subgoal] : main_facts;
+
+    int best_idx = -1;
+    uint64_t best_cost = UINT64_MAX;
+    for (int i = 0; i < subgoal_count; i++) {
+        if (visited[i])
+            continue;
+        s_multi_subgoal *cand = &subgoals[i];
+        uint64_t db_size = raxSize(cand->db->index_spo);
+        int bound_terms = 0;
+        for (int t = 0; t < 3; t++) {
+            if (cand->slots[t]) {
+                if (*cand->slots[t])
+                    bound_terms++;
+            } else if (cand->terms[t]) {
+                bound_terms++;
+            }
+        }
+        uint64_t cost;
+        if (bound_terms == 3)
+            cost = 0;
+        else if (bound_terms == 2)
+            cost = db_size;
+        else if (bound_terms == 1)
+            cost = db_size * 64 + 64;
+        else
+            cost = db_size * 4096 + 4096;
+
+        if (best_idx == -1 || cost < best_cost) {
+            best_cost = cost;
+            best_idx = i;
+            if (cost == 0)
+                break;
+        }
+    }
+
+    visited[best_idx] = 1;
+    s_multi_subgoal *sub = &subgoals[best_idx];
+    s_facts *db = sub->db;
     int solutions = 0;
-    const char *s_val =
-        sub->s && sub->s[0] == '?'
-            ? (bindings_get(bindings, sub->s) && *bindings_get(bindings, sub->s) ? *bindings_get(bindings, sub->s) : sub->s)
-            : sub->s;
-    const char *p_val =
-        sub->p && sub->p[0] == '?'
-            ? (bindings_get(bindings, sub->p) && *bindings_get(bindings, sub->p) ? *bindings_get(bindings, sub->p) : sub->p)
-            : sub->p;
-    const char *o_val =
-        sub->o && sub->o[0] == '?'
-            ? (bindings_get(bindings, sub->o) && *bindings_get(bindings, sub->o) ? *bindings_get(bindings, sub->o) : sub->o)
-            : sub->o;
+    const char *s_val = (sub->slots[0] && *sub->slots[0]) ? *sub->slots[0] : sub->terms[0];
+    const char *p_val = (sub->slots[1] && *sub->slots[1]) ? *sub->slots[1] : sub->terms[1];
+    const char *o_val = (sub->slots[2] && *sub->slots[2]) ? *sub->slots[2] : sub->terms[2];
 
     s_facts_cursor fc;
     const char *cursor_s = NULL, *cursor_p = NULL, *cursor_o = NULL;
@@ -576,56 +597,84 @@ static int naive_solve_rec(s_facts *main_facts, s_facts **dbs, s_spec_fact *subg
         facts_with_3(db, &fc, s_val, p_val, o_val);
     s_fact *f;
     while ((f = facts_cursor_next(&fc))) {
-        const char *fs = symbol_to_str(f->s);
-        const char *fp = symbol_to_str(f->p);
-        const char *fo = symbol_to_str(f->o);
-
-        const char *terms[3] = {sub->s, sub->p, sub->o};
-        const char *values[3] = {fs, fp, fo};
+        const char *values[3] = {symbol_to_str(f->s), symbol_to_str(f->p), symbol_to_str(f->o)};
         const char **changed_slots[3];
-        const char *old_values[3];
         int changed_count = 0;
         int compatible = 1;
         for (int i = 0; i < 3; i++) {
-            if (!terms[i] || terms[i][0] != '?')
+            const char **slot = sub->slots[i];
+            if (!slot) {
+                if (sub->terms[i] && sub->terms[i][0] == '?') {
+                    compatible = 0;
+                    break;
+                }
                 continue;
-            const char **slot = bindings_get(bindings, terms[i]);
-            if (!slot || (*slot && strcmp(*slot, values[i]) != 0)) {
+            }
+            if (*slot && strcmp(*slot, values[i]) != 0) {
                 compatible = 0;
                 break;
             }
             if (!*slot) {
-                int already_changed = 0;
-                for (int j = 0; j < changed_count; j++) {
-                    if (changed_slots[j] == slot) {
-                        already_changed = 1;
-                        break;
-                    }
-                }
-                if (!already_changed) {
-                    changed_slots[changed_count] = slot;
-                    old_values[changed_count] = *slot;
-                    changed_count++;
-                }
+                changed_slots[changed_count++] = slot;
                 *slot = values[i];
             }
         }
 
         if (compatible)
-            solutions += naive_solve_rec(main_facts, dbs, subgoals, subgoal_count, current_subgoal + 1, bindings, cb, user_data);
+            solutions += naive_solve_rec(subgoals, visited, subgoal_count, remaining - 1, bindings, cb, user_data);
 
         for (int i = 0; i < changed_count; i++)
-            *changed_slots[i] = old_values[i];
+            *changed_slots[i] = NULL;
     }
     facts_cursor_stop(&fc);
+    visited[best_idx] = 0;
     return solutions;
 }
 
 int facts_lftj_solve_multi(s_facts *facts, s_facts **dbs, p_spec spec, s_binding *bindings,
                            void (*cb)(s_binding *bindings, void *user_data), void *user_data)
 {
-    int subgoal_count = spec_count_facts(spec);
-    if (subgoal_count == 0)
+    size_t subgoal_count_sz = spec_count_facts(spec);
+    if (subgoal_count_sz == 0 || subgoal_count_sz > INT_MAX)
         return 0;
-    return naive_solve_rec(facts, dbs, (s_spec_fact *)spec, subgoal_count, 0, bindings, cb, user_data);
+    int subgoal_count = (int)subgoal_count_sz;
+
+    s_spec_fact *raw_subgoals = (s_spec_fact *)spec;
+    for (int i = 0; i < subgoal_count; i++) {
+        s_facts *db = (dbs && dbs[i]) ? dbs[i] : facts;
+        if (!db || raxSize(db->index_spo) == 0)
+            return 0;
+    }
+
+    s_multi_subgoal stack_subgoals[16];
+    unsigned char stack_visited[16];
+    s_multi_subgoal *subgoals = (subgoal_count <= 16) ? stack_subgoals : calloc(subgoal_count_sz, sizeof(*subgoals));
+    unsigned char *visited = (subgoal_count <= 16) ? stack_visited : calloc(subgoal_count_sz, sizeof(*visited));
+    if (!subgoals || !visited) {
+        if (subgoals != stack_subgoals)
+            free(subgoals);
+        if (visited != stack_visited)
+            free(visited);
+        return 0;
+    }
+    if (subgoal_count <= 16)
+        memset(stack_visited, 0, (size_t)subgoal_count);
+
+    for (int i = 0; i < subgoal_count; i++) {
+        subgoals[i].db = (dbs && dbs[i]) ? dbs[i] : facts;
+        subgoals[i].terms[0] = raw_subgoals[i].s;
+        subgoals[i].terms[1] = raw_subgoals[i].p;
+        subgoals[i].terms[2] = raw_subgoals[i].o;
+        for (int t = 0; t < 3; t++) {
+            const char *term = subgoals[i].terms[t];
+            subgoals[i].slots[t] = (term && term[0] == '?') ? bindings_get(bindings, term) : NULL;
+        }
+    }
+
+    int solutions = naive_solve_rec(subgoals, visited, subgoal_count, subgoal_count, bindings, cb, user_data);
+    if (subgoals != stack_subgoals)
+        free(subgoals);
+    if (visited != stack_visited)
+        free(visited);
+    return solutions;
 }

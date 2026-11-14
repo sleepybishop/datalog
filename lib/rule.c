@@ -172,7 +172,7 @@ int datalog_rule_validate(const s_datalog_rule *rule)
     const char **pos_vars = NULL;
     size_t pos_vars_count = 0;
 
-    // 1. Collect all variables in positive body subgoals
+    /* 1. collect all variables in positive body subgoals */
     for (size_t i = 0; i < rule->body_count; i++) {
         const s_spec_fact *sub = &rule->body[i];
         if (sub->negated == NULL) {
@@ -185,7 +185,7 @@ int datalog_rule_validate(const s_datalog_rule *rule)
         }
     }
 
-    // 2. Head check
+    /* 2. head check */
     int safe = 1;
     if (is_variable(rule->head.s) && !list_contains(pos_vars, pos_vars_count, rule->head.s))
         safe = 0;
@@ -194,7 +194,7 @@ int datalog_rule_validate(const s_datalog_rule *rule)
     if (is_variable(rule->head.o) && !list_contains(pos_vars, pos_vars_count, rule->head.o))
         safe = 0;
 
-    // 3. Negated body subgoals check
+    /* 3. negated body subgoals check */
     if (safe) {
         for (size_t i = 0; i < rule->body_count; i++) {
             const s_spec_fact *sub = &rule->body[i];
@@ -370,20 +370,28 @@ static s_rule_token next_rule_token(const char **p)
 
     if (**p == '"') {
         (*p)++;
-        const char *start = *p;
-        while (**p && **p != '"') {
-            (*p)++;
+        const char *scan = *p;
+        size_t max_len = 0;
+        while (*scan && *scan != '"') {
+            if (*scan == '\\' && scan[1])
+                scan++;
+            scan++;
+            max_len++;
         }
-        if (**p == '"') {
-            size_t len = *p - start;
+        if (*scan == '"') {
             t.type = RULE_TOK_CONST;
-            t.value = malloc(len + 1);
+            t.value = malloc(max_len + 1);
             if (!t.value) {
                 t.type = RULE_TOK_ERROR;
                 return t;
             }
-            memcpy(t.value, start, len);
-            t.value[len] = '\0';
+            size_t out = 0;
+            while (**p && **p != '"') {
+                if (**p == '\\' && (*p)[1])
+                    (*p)++;
+                t.value[out++] = *(*p)++;
+            }
+            t.value[out] = '\0';
             (*p)++;
             return t;
         } else {

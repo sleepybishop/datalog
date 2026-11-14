@@ -13,31 +13,6 @@
 
 static s_datalog_program *repl_program = NULL;
 
-void clear_idb_facts(s_facts *facts, const s_datalog_program *prog)
-{
-    for (size_t i = 0; i < prog->rule_count; i++) {
-        const char *pred = prog->rules[i].head.p;
-        if (pred) {
-            s_facts_cursor c;
-            facts_with_0(facts, &c, NULL, NULL, NULL);
-            s_fact *f;
-            s_fact_list *fl = NULL;
-            while ((f = facts_cursor_next(&c)) != NULL) {
-                if (strcmp(symbol_to_str(f->p), pred) == 0) {
-                    fl = fact_list_intern(fl, f);
-                }
-            }
-            facts_cursor_stop(&c);
-            s_fact_list *fli = fl;
-            while (fli) {
-                facts_remove_fact(facts, fli->fact);
-                fli = fli->next;
-            }
-            delete_fact_list(fl);
-        }
-    }
-}
-
 void execute_query(s_facts *facts, const char *query_str)
 {
     int is_ask = sparql_query_is_ask(facts, query_str);
@@ -70,7 +45,7 @@ void execute_query(s_facts *facts, const char *query_str)
     s_facts_with_cursor c;
     s_binding *bindings = NULL;
     if (facts_sparql_eval(facts, query_str, &c, &bindings) == 0) {
-        // Print headers
+        /* print headers */
         for (size_t i = 0; i < proj_count; i++) {
             printf("%s\t", proj_vars[i]);
         }
@@ -80,7 +55,7 @@ void execute_query(s_facts *facts, const char *query_str)
         }
         printf("\n");
 
-        // Print results
+        /* print results */
         int rows = 0;
         while (facts_with_cursor_next(&c)) {
             for (size_t i = 0; i < proj_count; i++) {
@@ -97,7 +72,7 @@ void execute_query(s_facts *facts, const char *query_str)
         fprintf(stderr, "Error: query execution failed\n");
     }
 
-    // Cleanup
+    /* cleanup */
     for (size_t i = 0; i < proj_count; i++) {
         free(proj_vars[i]);
     }
@@ -106,7 +81,7 @@ void execute_query(s_facts *facts, const char *query_str)
 
 void process_input(s_facts *facts, const char *line, const char *db_filename)
 {
-    // Skip leading whitespace
+    /* skip leading whitespace */
     while (*line && (*line == ' ' || *line == '\t' || *line == '\r' || *line == '\n')) {
         line++;
     }
@@ -119,10 +94,10 @@ void process_input(s_facts *facts, const char *line, const char *db_filename)
     } else if (strcasecmp(line, "CLEAR RULES") == 0) {
         delete_datalog_program(repl_program);
         repl_program = new_datalog_program();
+        facts_detach_program(facts);
         printf("Rules cleared.\n");
     } else if (strstr(line, ":-") != NULL) {
-        if (datalog_program_parse_rules(repl_program, line) == 0) {
-            facts_datalog_eval(facts, repl_program);
+        if (datalog_program_parse_rules(repl_program, line) == 0 && facts_attach_program(facts, repl_program) == 0) {
             printf("Successfully added rule(s).\n");
         } else {
             fprintf(stderr, "Error: failed to parse or validate rule(s)\n");
@@ -131,7 +106,7 @@ void process_input(s_facts *facts, const char *line, const char *db_filename)
         int added = facts_sparql_insert(facts, line);
         if (added >= 0) {
             printf("Successfully added %d facts.\n", added);
-            // Persist changes if db_filename is provided
+            /* persist changes if db_filename is provided */
             if (db_filename) {
                 FILE *fp = fopen(db_filename, "w");
                 if (fp) {
@@ -160,7 +135,6 @@ int main(int argc, char **argv)
     repl_program = new_datalog_program();
     s_intern *sym = new_intern(100000);
     s_facts *facts = new_facts(sym, 100000);
-    facts->prog = repl_program;
     const char *db_filename = NULL;
 
     if (argc > 1) {
@@ -171,6 +145,7 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Error: could not open database file '%s'\n", db_filename);
                 delete_facts(facts);
                 delete_intern(sym);
+                delete_datalog_program(repl_program);
                 return 1;
             }
             if (read_facts(facts, fp) < 0) {
@@ -178,6 +153,7 @@ int main(int argc, char **argv)
                 fclose(fp);
                 delete_facts(facts);
                 delete_intern(sym);
+                delete_datalog_program(repl_program);
                 return 1;
             }
             fclose(fp);
@@ -187,11 +163,17 @@ int main(int argc, char **argv)
         }
     }
 
-    // If STDIN is not a TTY, read all input and execute once
+    /* if STDIN is not a TTY, read all input and execute once */
     if (!isatty(STDIN_FILENO)) {
         size_t capacity = 4096;
         size_t size = 0;
         char *buf = malloc(capacity);
+        if (!buf) {
+            delete_facts(facts);
+            delete_intern(sym);
+            delete_datalog_program(repl_program);
+            return 1;
+        }
         while (1) {
             size_t n = fread(buf + size, 1, capacity - size - 1, stdin);
             if (n == 0)
@@ -199,14 +181,22 @@ int main(int argc, char **argv)
             size += n;
             if (size + 1 >= capacity) {
                 capacity *= 2;
-                buf = realloc(buf, capacity);
+                char *new_buf = realloc(buf, capacity);
+                if (!new_buf) {
+                    free(buf);
+                    delete_facts(facts);
+                    delete_intern(sym);
+                    delete_datalog_program(repl_program);
+                    return 1;
+                }
+                buf = new_buf;
             }
         }
         buf[size] = '\0';
         process_input(facts, buf, db_filename);
         free(buf);
     } else {
-        // Interactive REPL
+        /* interactive REPL */
         char *line;
         linenoiseHistoryLoad("history.txt");
         printf("SPARQL Query REPL (datalog engine)\n");

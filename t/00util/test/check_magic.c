@@ -50,6 +50,30 @@ START_TEST(test_magic_sets_rejects_invalid_goal)
 }
 END_TEST
 
+START_TEST(test_magic_sets_negated_subgoal_does_not_bind_vars)
+{
+    s_datalog_program *prog = new_datalog_program();
+    const char *rules_str = "?x <reach> ?y :- ?x <edge> ?y .\n"
+                            "?x <Filtered> ?y :- NOT( ?x <blocked> ?z ) , ?z <reach> ?y , ?x <edge> ?z .";
+    ck_assert_int_eq(datalog_program_parse_rules(prog, rules_str), 0);
+
+    s_spec_fact query_goal = {"alice", "Filtered", "?y", NULL};
+    s_datalog_program *magic_prog = datalog_program_magic_transform(prog, &query_goal);
+    ck_assert(magic_prog != NULL);
+
+    /* because ?z only appears in NOT(?x <blocked> ?z) before ?z <reach> ?y, ?z is free ("ff") at ?z <reach> ?y */
+    int found_reach_ff = 0;
+    for (size_t i = 0; i < magic_prog->rule_count; i++) {
+        if (magic_prog->rules[i].head.p && strcmp(magic_prog->rules[i].head.p, "reach_ff") == 0)
+            found_reach_ff = 1;
+    }
+    ck_assert_int_eq(found_reach_ff, 1);
+
+    delete_datalog_program(magic_prog);
+    delete_datalog_program(prog);
+}
+END_TEST
+
 Suite *magic_suite(void)
 {
     Suite *s;
@@ -60,6 +84,7 @@ Suite *magic_suite(void)
 
     tcase_add_test(tc_core, test_magic_sets_transformation);
     tcase_add_test(tc_core, test_magic_sets_rejects_invalid_goal);
+    tcase_add_test(tc_core, test_magic_sets_negated_subgoal_does_not_bind_vars);
 
     suite_add_tcase(s, tc_core);
     return s;

@@ -13,7 +13,6 @@ void fact_init(s_fact *f, Symbol s, Symbol p, Symbol o)
     f->negated = NULL;
     f->asserted_count = 1;
     f->derived_count = 0;
-    f->proof_count = 1;
 }
 
 s_fact *new_fact(Symbol s, Symbol p, Symbol o)
@@ -26,7 +25,6 @@ s_fact *new_fact(Symbol s, Symbol p, Symbol o)
         fact->negated = NULL;
         fact->asserted_count = 1;
         fact->derived_count = 0;
-        fact->proof_count = 1;
     }
     return fact;
 }

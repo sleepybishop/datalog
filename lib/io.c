@@ -9,21 +9,18 @@ int write_string_quoted(const char *string, FILE *fp)
 {
     size_t i;
     size_t string_len = strlen(string);
-    if (fwrite("\"", 1, 1, fp) != 1)
+    if (putc_unlocked('"', fp) == EOF)
         return -1;
     for (i = 0; i < string_len; i++) {
-        switch (string[i]) {
-        case '"':
-        case '\\':
-            if (fwrite("\\", 1, 1, fp) != 1)
-                return -1;
-            /* fallthrough */
-        default:
-            if (fwrite(string + i, 1, 1, fp) != 1)
+        unsigned char c = (unsigned char)string[i];
+        if (c == '"' || c == '\\') {
+            if (putc_unlocked('\\', fp) == EOF)
                 return -1;
         }
+        if (putc_unlocked(c, fp) == EOF)
+            return -1;
     }
-    if (fwrite("\"\n", 2, 1, fp) != 1)
+    if (putc_unlocked('"', fp) == EOF || putc_unlocked('\n', fp) == EOF)
         return -1;
     return 0;
 }
@@ -32,59 +29,60 @@ int write_string(const char *string, FILE *fp)
 {
     if (string[0] == '"' || strchr(string, '\n') || strchr(string, '\\'))
         return write_string_quoted(string, fp);
-    if (string[0])
-        if (fwrite(string, strlen(string), 1, fp) != 1)
+    if (string[0]) {
+        size_t len = strlen(string);
+        if (fwrite(string, 1, len, fp) != len)
             return -1;
-    if (fwrite("\n", 1, 1, fp) != 1)
+    }
+    if (putc_unlocked('\n', fp) == EOF)
         return -1;
     return 0;
 }
 
 int read_string_quoted(char *buf, size_t len, FILE *fp)
 {
-    char c;
-    if (fread(&c, 1, 1, fp) != 1)
+    int ch = getc_unlocked(fp);
+    if (ch == EOF)
         return -1;
-    while (c != '"') {
+    while (ch != '"') {
         if (len == 1)
             return -1;
-        if (c == '\\')
-            if (fread(&c, 1, 1, fp) != 1)
+        if (ch == '\\') {
+            ch = getc_unlocked(fp);
+            if (ch == EOF)
                 return -1;
-        if (!c)
+        }
+        if (ch == '\0')
             return -1;
-        *buf = c;
+        *buf++ = (char)ch;
         len--;
-        buf++;
-        if (fread(&c, 1, 1, fp) != 1)
+        ch = getc_unlocked(fp);
+        if (ch == EOF)
             return -1;
     }
     *buf = 0;
-    if (fread(&c, 1, 1, fp) != 1)
-        return -1;
-    if (c != '\n')
+    ch = getc_unlocked(fp);
+    if (ch != '\n')
         return -1;
     return 0;
 }
 
 int read_string(char *buf, size_t len, FILE *fp)
 {
-    char c;
     assert(buf);
     assert(len > 0);
-    if (fread(&c, 1, 1, fp) != 1)
+    int ch = getc_unlocked(fp);
+    if (ch == EOF)
         return -1;
-    if (c == '"')
+    if (ch == '"')
         return read_string_quoted(buf, len, fp);
-    while (c != '\n') {
-        if (len == 1)
+    while (ch != '\n') {
+        if (len == 1 || ch == '\0')
             return -1;
-        if (!c)
-            return -1;
-        *buf = c;
+        *buf++ = (char)ch;
         len--;
-        buf++;
-        if (fread(&c, 1, 1, fp) != 1)
+        ch = getc_unlocked(fp);
+        if (ch == EOF)
             return -1;
     }
     *buf = 0;
@@ -101,7 +99,7 @@ int write_fact(const s_fact *f, FILE *fp)
         return -1;
     if (write_string(symbol_to_str(f->o), fp))
         return -1;
-    if (write_string("", fp))
+    if (putc_unlocked('\n', fp) == EOF)
         return -1;
     return 0;
 }
@@ -150,16 +148,14 @@ int read_fact(s_facts *facts, s_fact *f, char *buf, size_t buf_sz, FILE *fp)
         return -1;
     if (!(f->o = facts_intern(facts, buf)))
         return -1;
-    if (fread(buf, 1, 1, fp) != 1)
-        return -1;
-    if (buf[0] != '\n')
+    if (getc_unlocked(fp) != '\n')
         return -1;
     return 0;
 }
 
 static int fpeek(FILE *fp)
 {
-    int c = fgetc(fp);
+    int c = getc_unlocked(fp);
     if (c >= 0)
         ungetc(c, fp);
     return c;
@@ -192,9 +188,10 @@ int read_facts(s_facts *facts, FILE *fp)
 
 int write_fact_log(const char *operation, const s_fact *f, FILE *fp)
 {
-    if (fwrite(operation, strlen(operation), 1, fp) != 1)
+    size_t len = strlen(operation);
+    if (fwrite(operation, 1, len, fp) != len)
         return -1;
-    if (fwrite("\n", 1, 1, fp) != 1)
+    if (putc_unlocked('\n', fp) == EOF)
         return -1;
     if (write_fact(f, fp))
         return -1;
@@ -219,7 +216,7 @@ int read_facts_log(s_facts *facts, FILE *fp)
         size_t len = strlen(operation);
         if (len > 0 && operation[len - 1] != '\n') {
             int c;
-            while ((c = fgetc(fp)) != '\n' && c != EOF) {
+            while ((c = getc_unlocked(fp)) != '\n' && c != EOF) {
             }
             free(buf);
             return -1;
@@ -276,7 +273,7 @@ int write_spec(p_spec spec, FILE *fp)
             return -1;
         if (write_string(f.o, fp))
             return -1;
-        if (write_string("", fp))
+        if (putc_unlocked('\n', fp) == EOF)
             return -1;
     }
     return 0;

@@ -2,6 +2,7 @@
 #define JUSTIFICATION_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct justification_support {
     char *s;
@@ -17,6 +18,8 @@ typedef struct justification {
     size_t rule_index;
     s_justification_support *supports;
     size_t support_count;
+    uint64_t conclusion_hash;
+    uint64_t hash;
 } s_justification;
 
 typedef struct justification_graph {

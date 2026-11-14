@@ -5,7 +5,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "fact.h"
-#include "urcu.h"
 
 typedef struct facts s_facts;
 
@@ -22,7 +21,7 @@ typedef struct rollback_stack {
     size_t size;
 } s_rollback_stack;
 
-/* Return nonzero to abort and roll back the outer transaction. */
+/* return nonzero to abort and roll back the outer transaction. */
 typedef int (*f_facts_tx_listener)(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data);
 typedef void (*f_facts_commit_observer)(s_facts *facts, void *user_data);
 
@@ -35,6 +34,8 @@ typedef void (*f_facts_commit_summary_observer)(s_facts *facts, const s_facts_co
 
 typedef struct transaction {
     int level;
+    size_t *savepoints;
+    size_t savepoint_capacity;
     s_rollback_stack rollback;
     pthread_rwlock_t rwlock;
     pthread_mutex_t state_mutex;
@@ -50,7 +51,6 @@ typedef struct transaction {
     void *commit_summary_observer_data;
     f_facts_commit_summary_observer internal_commit_summary_observer;
     void *internal_commit_summary_observer_data;
-    urcu_t rcu;
 } s_transaction;
 
 void transaction_init(s_transaction *tx);

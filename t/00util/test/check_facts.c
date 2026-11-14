@@ -2207,9 +2207,31 @@ START_TEST(test_facts_tx_listener_and_entity_builder)
     ck_assert_int_eq(facts_get_prop_long(g_f, "movie:1", "year"), 2010);
     ck_assert_double_eq_tol(facts_get_prop_double(g_f, "movie:1", "rating"), 8.8, 1e-9);
 
-    // Listener should have been called with 3 entries:
+    /* Listener should have been called with 3 entries: */
     ck_assert_int_eq(g_listener_called, 1);
     ck_assert_int_eq(g_listener_entry_count, 3);
+}
+END_TEST
+
+START_TEST(test_nested_transaction_rollback_preserves_outer_transaction)
+{
+    ck_assert_int_eq(facts_transaction_begin(g_f), 0);
+    ck_assert(facts_add_spo(g_f, "outer", "status", "kept") != NULL);
+
+    ck_assert_int_eq(facts_transaction_begin(g_f), 0);
+    ck_assert(facts_add_spo(g_f, "inner", "status", "discarded") != NULL);
+    ck_assert_int_eq(facts_contains_spo(g_f, "inner", "status", "discarded"), 1);
+
+    ck_assert_int_eq(facts_transaction_rollback(g_f), 0);
+    ck_assert_int_eq(facts_contains_spo(g_f, "inner", "status", "discarded"), 0);
+    ck_assert_int_eq(facts_contains_spo(g_f, "outer", "status", "kept"), 1);
+
+    ck_assert(facts_add_spo(g_f, "outer2", "status", "kept") != NULL);
+    ck_assert_int_eq(facts_transaction_commit(g_f), 0);
+
+    ck_assert_int_eq(facts_contains_spo(g_f, "outer", "status", "kept"), 1);
+    ck_assert_int_eq(facts_contains_spo(g_f, "outer2", "status", "kept"), 1);
+    ck_assert_int_eq(facts_contains_spo(g_f, "inner", "status", "discarded"), 0);
 }
 END_TEST
 
@@ -2345,6 +2367,7 @@ Suite *facts_suite(void)
     tcase_add_test(tc_prop, test_facts_log_tracks_asserted_support_only);
     tcase_add_test(tc_prop, test_facts_tx_listener_and_entity_builder);
     tcase_add_test(tc_prop, test_failing_tx_listener_rolls_back_base_and_derived_changes);
+    tcase_add_test(tc_prop, test_nested_transaction_rollback_preserves_outer_transaction);
     suite_add_tcase(s, tc_prop);
     return s;
 }

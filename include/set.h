@@ -8,13 +8,7 @@ struct set_item {
     size_t len;
     size_t hash;
     unsigned long usage;
-    int long_p;
-    long long_value;
-    int double_p;
-    double double_value;
 };
-
-s_set_item *new_set_item(size_t len, void *data, size_t hash);
 
 typedef size_t (*f_hash)(const void *data, size_t len);
 

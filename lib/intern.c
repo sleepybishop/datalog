@@ -151,10 +151,6 @@ Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
         i->len = len;
         i->hash = 0;
         i->usage = 0;
-        i->long_p = 0;
-        i->long_value = 0;
-        i->double_p = 0;
-        i->double_value = 0.0;
 
         int ret = raxInsert(intern->symbols, (unsigned char *)string, len, i, NULL);
         if (ret != 1) {

@@ -15,41 +15,14 @@
 int facts_rollback_push(s_facts *facts, e_rollback_action action, const s_fact *fact);
 static s_fact *facts_lookup_spo_locked(s_facts *facts, const char *s, const char *p, const char *o);
 
-static inline uint64_t get_symbol_id(Symbol ptr)
-{
-    if (ptr == P_FIRST)
-        return 0;
-    if (ptr == P_LAST)
-        return 0xFFFFFFFFFFFFFFFFULL;
-    return ptr->id;
-}
-
-static inline void encode_uint64_be(unsigned char *buf, uint64_t val)
-{
-    buf[0] = (val >> 56) & 0xFF;
-    buf[1] = (val >> 48) & 0xFF;
-    buf[2] = (val >> 40) & 0xFF;
-    buf[3] = (val >> 32) & 0xFF;
-    buf[4] = (val >> 24) & 0xFF;
-    buf[5] = (val >> 16) & 0xFF;
-    buf[6] = (val >> 8) & 0xFF;
-    buf[7] = val & 0xFF;
-}
-
 static void encode_cursor_key(unsigned char *key, const s_fact *f, int index_type)
 {
-    if (index_type == 0) { // SPO
-        encode_uint64_be(key, get_symbol_id(f->s));
-        encode_uint64_be(key + 8, get_symbol_id(f->p));
-        encode_uint64_be(key + 16, get_symbol_id(f->o));
-    } else if (index_type == 1) { // POS
-        encode_uint64_be(key, get_symbol_id(f->p));
-        encode_uint64_be(key + 8, get_symbol_id(f->o));
-        encode_uint64_be(key + 16, get_symbol_id(f->s));
-    } else { // OSP
-        encode_uint64_be(key, get_symbol_id(f->o));
-        encode_uint64_be(key + 8, get_symbol_id(f->s));
-        encode_uint64_be(key + 16, get_symbol_id(f->p));
+    if (index_type == 0) { /* SPO */
+        encode_triple_key(key, f->s, f->p, f->o);
+    } else if (index_type == 1) { /* POS */
+        encode_triple_key(key, f->p, f->o, f->s);
+    } else { /* OSP */
+        encode_triple_key(key, f->o, f->s, f->p);
     }
 }
 
@@ -142,81 +115,12 @@ void facts_reset(s_facts *facts)
 
 int facts_reset_checked(s_facts *facts)
 {
-    s_set_cursor sc;
-    s_set_item *si;
-    s_set replacement_index = {0};
-    s_hexastore *replacement_hexastore = NULL;
-    s_justification_graph *replacement_justifications = NULL;
-    s_intern *replacement_symbols = NULL;
-    int has_lock;
-
     if (!facts || transaction_writer_owned(&facts->tx))
         return -1;
-    has_lock = transaction_acquire_writer(&facts->tx);
-
-    /* Allocate every replacement before touching the live database. */
-    if (set_init_checked(&replacement_index, facts->index.max) != 0)
-        goto error;
-    replacement_hexastore = new_hexastore();
-    if (!replacement_hexastore)
-        goto error;
-    replacement_justifications = new_justification_graph();
-    if (!replacement_justifications)
-        goto error;
-    if (facts->symbols_delete) {
-        replacement_symbols = new_intern(facts->index.max);
-        if (!replacement_symbols)
-            goto error;
-    }
-
-    delete_justification_graph(facts->justifications_staging);
-    delete_justification_graph(facts->justifications);
-    facts->justifications_staging = NULL;
-    facts->justifications = replacement_justifications;
-    replacement_justifications = NULL;
-
-    // 1. Recycle all facts back into the fact arena pool
-    set_cursor_init(&facts->index, &sc);
-    while ((si = set_cursor_next(&sc))) {
-        s_fact *fact = (s_fact *)si->data;
-        intern_unstring(facts->symbols, fact->s);
-        intern_unstring(facts->symbols, fact->p);
-        intern_unstring(facts->symbols, fact->o);
-        arena_free_fact(fact);
-    }
-
-    // 2. Replace the hexastore index.
-    delete_hexastore(facts->hexastore);
-    facts->hexastore = replacement_hexastore;
-    replacement_hexastore = NULL;
-    facts->index_spo = facts->hexastore->trie_spo;
-    facts->index_pos = facts->hexastore->trie_pos;
-    facts->index_osp = facts->hexastore->trie_osp;
-
-    // 3. Replace the facts index hash set.
-    set_destroy(&facts->index);
-    facts->index = replacement_index;
-    memset(&replacement_index, 0, sizeof(replacement_index));
-
-    // 4. Replace an owned symbol table; shared tables were unreferenced above.
-    if (facts->symbols_delete) {
-        delete_intern(facts->symbols);
-        facts->symbols = replacement_symbols;
-        replacement_symbols = NULL;
-    }
-
-    /* The transaction object and registered callbacks remain valid. */
+    int has_lock = transaction_acquire_writer(&facts->tx);
+    int result = facts_reset_local_db(facts);
     transaction_release_writer(&facts->tx, has_lock);
-    return 0;
-
-error:
-    delete_intern(replacement_symbols);
-    delete_justification_graph(replacement_justifications);
-    delete_hexastore(replacement_hexastore);
-    if (replacement_index.items)
-        set_destroy(&replacement_index);
-    transaction_release_writer(&facts->tx, has_lock);
-    return -1;
+    return result;
 }
 
 int facts_reset_local_db(s_facts *facts)
@@ -231,7 +135,7 @@ int facts_reset_local_db(s_facts *facts)
     if (!facts || !transaction_writer_owned(&facts->tx) || facts->tx.level != 0 || facts->tx.rollback.size != 0)
         return -1;
 
-    /* Allocate every replacement before touching the live database. */
+    /* allocate every replacement before touching the live database. */
     if (set_init_checked(&replacement_index, facts->index.max) != 0)
         goto error;
     replacement_hexastore = new_hexastore();
@@ -252,7 +156,7 @@ int facts_reset_local_db(s_facts *facts)
     facts->justifications = replacement_justifications;
     replacement_justifications = NULL;
 
-    // 1. Recycle all facts back into the fact arena pool
+    /* 1. recycle all facts back into the fact arena pool */
     set_cursor_init(&facts->index, &sc);
     while ((si = set_cursor_next(&sc))) {
         s_fact *fact = (s_fact *)si->data;
@@ -262,7 +166,7 @@ int facts_reset_local_db(s_facts *facts)
         arena_free_fact(fact);
     }
 
-    // 2. Replace the hexastore index.
+    /* 2. replace the hexastore index. */
     delete_hexastore(facts->hexastore);
 
     facts->hexastore = replacement_hexastore;
@@ -271,12 +175,12 @@ int facts_reset_local_db(s_facts *facts)
     facts->index_pos = facts->hexastore->trie_pos;
     facts->index_osp = facts->hexastore->trie_osp;
 
-    // 3. Replace the facts index hash set.
+    /* 3. replace the facts index hash set. */
     set_destroy(&facts->index);
     facts->index = replacement_index;
     memset(&replacement_index, 0, sizeof(replacement_index));
 
-    // 4. Replace an owned symbol table; shared tables were unreferenced above.
+    /* 4. replace an owned symbol table; shared tables were unreferenced above. */
     if (facts->symbols_delete) {
         delete_intern(facts->symbols);
         facts->symbols = replacement_symbols;
@@ -429,7 +333,6 @@ static void fact_set_origin(s_fact *fact, e_fact_origin origin)
 {
     fact->asserted_count = origin == FACT_ORIGIN_ASSERTED ? 1 : 0;
     fact->derived_count = origin == FACT_ORIGIN_DERIVED ? 1 : 0;
-    fact->proof_count = fact->asserted_count + fact->derived_count;
 }
 
 static s_fact *facts_insert_fact_copy(s_facts *facts, const s_fact *f, int record_rollback)
@@ -440,7 +343,6 @@ static s_fact *facts_insert_fact_copy(s_facts *facts, const s_fact *f, int recor
     new->negated = f->negated;
     new->asserted_count = f->asserted_count;
     new->derived_count = f->derived_count;
-    new->proof_count = f->asserted_count + f->derived_count;
     Symbol s_ref = facts_intern(facts, symbol_to_str(new->s));
     Symbol p_ref = facts_intern(facts, symbol_to_str(new->p));
     Symbol o_ref = facts_intern(facts, symbol_to_str(new->o));
@@ -500,7 +402,6 @@ s_fact *facts_add_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
             if (origin == FACT_ORIGIN_ASSERTED && facts->log)
                 write_fact_log("add", found, facts->log);
             *support = 1;
-            found->proof_count = found->asserted_count + found->derived_count;
         }
         transaction_release_writer(&facts->tx, has_lock);
         return found;
@@ -662,7 +563,6 @@ int facts_remove_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
             write_fact_log("remove", found, facts->log);
         if (action == ROLLBACK_STATE) {
             *support = 0;
-            found->proof_count = found->asserted_count + found->derived_count;
         } else {
             facts_remove_found(facts, si, found);
         }
@@ -1068,15 +968,9 @@ int facts_with_checked(s_facts *facts, s_binding *bindings, s_facts_with_cursor 
     bindings_nullify(c->bindings);
     c->facts_count = facts_count;
     if (facts_count > 0) {
-        if (facts_count > SIZE_MAX / sizeof(s_facts_with_cursor_level))
+        if (facts_count > SIZE_MAX / sizeof(s_facts_with_cursor_level) || facts_count > SIZE_MAX / 6)
             goto allocation_error;
-        size_t total_ptrs = 0;
-        for (size_t i = 0; i < facts_count; i++) {
-            size_t remaining = facts_count - i;
-            if (remaining > (SIZE_MAX - 2) / 4 || total_ptrs > SIZE_MAX - (remaining * 4 + 2))
-                goto allocation_error;
-            total_ptrs += remaining * 4 + 2;
-        }
+        size_t total_ptrs = facts_count * 6;
         size_t levels_sz = facts_count * sizeof(s_facts_with_cursor_level);
         if (total_ptrs > SIZE_MAX / sizeof(const char *))
             goto allocation_error;
@@ -1096,9 +990,8 @@ int facts_with_checked(s_facts *facts, s_binding *bindings, s_facts_with_cursor 
         }
         facts_spec_sort(facts, c->spec, facts_count);
         for (size_t i = 0; i < facts_count; i++) {
-            size_t remaining = facts_count - i;
             c->l[i].spec = spec_ptr;
-            spec_ptr += remaining * 4 + 2;
+            spec_ptr += 6;
             c->l[i].spec_init = 0;
         }
     } else {
@@ -1397,18 +1290,16 @@ int facts_with_cursor_next_inner(s_facts_with_cursor *c)
     while (c->level < c->facts_count) {
         s_facts_with_cursor_level *l = c->l + c->level;
         if (!l->spec_init) {
-            p_spec parent_spec = c->level ? c->l[c->level - 1].spec + 4 : c->spec;
-            size_t remaining = c->facts_count - c->level;
-            memcpy(l->spec, parent_spec, (remaining * 4 + 1) * sizeof(const char *));
-            l->spec[remaining * 4 + 1] = NULL;
+            memcpy(l->spec, c->spec + c->level * 4, 4 * sizeof(const char *));
+            l->spec[4] = NULL;
+            l->spec[5] = NULL;
             spec_subst(l->spec, c->bindings);
             facts_with_spo(c->facts, c->bindings, &l->c, l->spec[0], l->spec[1], l->spec[2]);
             l->spec_init = 1;
         }
 
         if (l->spec[3] && strcmp(l->spec[3], ":not") == 0) {
-            // Negated level:
-            // Save bindings to isolate from potential variable matching
+            /* negated level: save bindings to isolate from potential variable matching */
             int bindings_count = 0;
             while (c->bindings && c->bindings[bindings_count].name)
                 bindings_count++;
@@ -1428,7 +1319,7 @@ int facts_with_cursor_next_inner(s_facts_with_cursor *c)
 
             s_fact *found_fact = facts_cursor_next(&l->c);
 
-            // Restore bindings
+            /* restore bindings */
             if (bindings_count > 0) {
                 for (int i = 0; i < bindings_count; i++) {
                     *c->bindings[i].value = saved_values[i];
@@ -1437,7 +1328,7 @@ int facts_with_cursor_next_inner(s_facts_with_cursor *c)
             }
 
             if (found_fact) {
-                // Fact exists in db, negation fails. Backtrack.
+                /* fact exists in db, negation fails. backtrack. */
                 facts_cursor_stop(&l->c);
                 l->spec_init = 0;
                 if (c->level > 0) {
@@ -1447,11 +1338,11 @@ int facts_with_cursor_next_inner(s_facts_with_cursor *c)
                     return 0;
                 }
             } else {
-                // Fact does not exist, negation succeeds. Advance.
+                /* fact does not exist, negation succeeds. advance. */
                 c->level++;
             }
         } else {
-            // Positive level:
+            /* positive level: */
             l->fact = facts_cursor_next(&l->c);
             if (l->fact) {
                 c->level++;
@@ -1799,7 +1690,6 @@ void facts_apply_rollback_entry(s_facts *facts, const s_rollback_entry *entry)
             write_fact_log(entry->fact.asserted_count ? "add" : "remove", fact, facts->log);
         fact->asserted_count = entry->fact.asserted_count;
         fact->derived_count = entry->fact.derived_count;
-        fact->proof_count = fact->asserted_count + fact->derived_count;
     }
     transaction_release_writer(&facts->tx, has_lock);
 }

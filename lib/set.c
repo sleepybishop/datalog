@@ -5,15 +5,6 @@
 #include "wyhash.h"
 #include "set.h"
 
-s_set_item *new_set_item(size_t len, void *data, size_t hash)
-{
-    (void)len;
-    (void)data;
-    (void)hash;
-    // new_set_item is legacy and no longer needed for open addressing.
-    return NULL;
-}
-
 static size_t set_wyhash(const void *key, size_t len)
 {
     return (size_t)wyhash(key, len, 0, _wyp);
@@ -87,7 +78,7 @@ s_set_item *set_add_h(s_set *set, void *data, size_t len, size_t hash)
     assert(data);
     assert(len > 0);
 
-    // Keep load factor <= 50% for optimal performance under linear probing
+    /* keep load factor <= 50% for optimal performance under linear probing */
     if (set->count * 2 >= set->max) {
         if (set->max > SIZE_MAX / 2 || set_resize_checked(set, set->max * 2) != 0)
             return NULL;
@@ -109,10 +100,6 @@ s_set_item *set_add_h(s_set *set, void *data, size_t len, size_t hash)
     set->items[i].len = len;
     set->items[i].hash = hash;
     set->items[i].usage = 0;
-    set->items[i].long_p = 0;
-    set->items[i].long_value = 0;
-    set->items[i].double_p = 0;
-    set->items[i].double_value = 0.0;
     set->count++;
     return &set->items[i];
 }
@@ -244,10 +231,6 @@ int set_resize_checked(s_set *set, size_t max)
                 return -1;
             }
             new_item->usage = old_items[i].usage;
-            new_item->long_p = old_items[i].long_p;
-            new_item->long_value = old_items[i].long_value;
-            new_item->double_p = old_items[i].double_p;
-            new_item->double_value = old_items[i].double_value;
         }
     }
     free(old_items);

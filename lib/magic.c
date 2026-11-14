@@ -205,20 +205,13 @@ static int transform_rule(s_datalog_program *magic_prog, const s_datalog_program
         sub_adornments[j][2] = '\0';
         is_sub_idb[j] = is_idb_predicate(prog, orig_rule->body[j].p);
         if ((is_sub_idb[j] && enqueue_adorned(queue, queue_count, queue_capacity, orig_rule->body[j].p, sub_adornments[j]) != 0) ||
-            add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].s) != 0 ||
-            add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].o) != 0)
+            (!orig_rule->body[j].negated && (add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].s) != 0 ||
+                                             add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].o) != 0)))
             goto cleanup;
     }
 
     if (has_magic_head &&
         make_magic_fact(&magic_head_fact, current->name, current->adornment, orig_rule->head.s, orig_rule->head.o) != 0)
-        goto cleanup;
-
-    free(bound_vars);
-    bound_vars = NULL;
-    bound_count = 0;
-    if ((current->adornment[0] == 'b' && add_var_to_bound(&bound_vars, &bound_count, orig_rule->head.s) != 0) ||
-        (current->adornment[1] == 'b' && add_var_to_bound(&bound_vars, &bound_count, orig_rule->head.o) != 0))
         goto cleanup;
 
     for (size_t j = 0; j < orig_rule->body_count; j++) {
@@ -244,17 +237,13 @@ static int transform_rule(s_datalog_program *magic_prog, const s_datalog_program
                 goto magic_rule_error;
             free_spec_fact_fields(&magic_rule_head);
             free_spec_fact_array(magic_body, initialized);
-            goto magic_rule_done;
+            continue;
 
         magic_rule_error:
             free_spec_fact_fields(&magic_rule_head);
             free_spec_fact_array(magic_body, initialized);
             goto cleanup;
         }
-    magic_rule_done:
-        if (add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].s) != 0 ||
-            add_var_to_bound(&bound_vars, &bound_count, orig_rule->body[j].o) != 0)
-            goto cleanup;
     }
 
     s_spec_fact rewritten_head = {0};

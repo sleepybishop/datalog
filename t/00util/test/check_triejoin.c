@@ -185,6 +185,32 @@ START_TEST(test_hexastore_compaction)
 }
 END_TEST
 
+START_TEST(test_lftj_solve_repeated_vars_and_trailing_constants)
+{
+    s_facts *facts = new_facts(NULL, 100);
+    ck_assert(facts != NULL);
+
+    facts_add_spo(facts, "a", "edge", "a");
+    facts_add_spo(facts, "a", "edge", "b");
+    facts_add_spo(facts, "b", "edge", "b");
+
+    /* subgoal with repeated variable (?x, "edge", ?x) */
+    const char *x = NULL;
+    s_binding b1[] = {{"?x", &x}, {NULL, NULL}};
+    p_spec s1 = spec_expand((p_spec)(const char *[]){"?x", "edge", "?x", NULL, NULL});
+    ck_assert_int_eq(facts_lftj_solve(facts, s1, b1), 2);
+    free(s1);
+
+    /* subgoal with all constants */
+    s_binding b2[] = {{NULL, NULL}};
+    p_spec s2 = spec_expand((p_spec)(const char *[]){"a", "edge", "b", NULL, NULL});
+    ck_assert_int_eq(facts_lftj_solve(facts, s2, b2), 1);
+    free(s2);
+
+    delete_facts(facts);
+}
+END_TEST
+
 Suite *triejoin_suite(void)
 {
     Suite *s;
@@ -196,6 +222,7 @@ Suite *triejoin_suite(void)
     tcase_add_test(tc_core, test_lftj_solve);
     tcase_add_test(tc_core, test_lftj_more_than_32_subgoals);
     tcase_add_test(tc_core, test_hexastore_compaction);
+    tcase_add_test(tc_core, test_lftj_solve_repeated_vars_and_trailing_constants);
     suite_add_tcase(s, tc_core);
     return s;
 }

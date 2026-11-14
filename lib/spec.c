@@ -31,24 +31,54 @@ size_t spec_count_facts(p_spec spec)
 /* calls malloc to return a new p_spec */
 p_spec spec_expand(p_spec spec)
 {
-    size_t count;
+    size_t count = 0;
+    size_t str_bytes = 0;
+    s_spec_cursor c;
+    s_spec_fact f;
     assert(spec);
-    count = spec_count_facts(spec);
+    spec_cursor_init(&c, spec);
+    while (spec_cursor_next(&c, &f)) {
+        count++;
+        str_bytes += strlen(f.s) + 1 + strlen(f.p) + 1 + strlen(f.o) + 1;
+        if (f.negated)
+            str_bytes += strlen(f.negated) + 1;
+    }
     if (count > 0) {
-        if (count > (SIZE_MAX - 2) / 4 || count * 4 + 2 > SIZE_MAX / sizeof(const char *))
+        if (count > (SIZE_MAX - 2) / 4 || (count * 4 + 2) > SIZE_MAX / sizeof(const char *))
             return NULL;
-        s_spec_cursor c;
-        s_spec_fact f;
-        p_spec new = calloc(count * 4 + 2, sizeof(const char *));
+        size_t ptrs_size = (count * 4 + 2) * sizeof(const char *);
+        if (ptrs_size > SIZE_MAX - str_bytes)
+            return NULL;
+        p_spec new = calloc(1, ptrs_size + str_bytes);
         if (!new)
             return NULL;
         p_spec n = new;
+        char *str_dst = (char *)new + ptrs_size;
         spec_cursor_init(&c, spec);
         while (spec_cursor_next(&c, &f)) {
-            *n++ = f.s;
-            *n++ = f.p;
-            *n++ = f.o;
-            *n++ = f.negated;
+            size_t len = strlen(f.s) + 1;
+            memcpy(str_dst, f.s, len);
+            *n++ = str_dst;
+            str_dst += len;
+
+            len = strlen(f.p) + 1;
+            memcpy(str_dst, f.p, len);
+            *n++ = str_dst;
+            str_dst += len;
+
+            len = strlen(f.o) + 1;
+            memcpy(str_dst, f.o, len);
+            *n++ = str_dst;
+            str_dst += len;
+
+            if (f.negated) {
+                len = strlen(f.negated) + 1;
+                memcpy(str_dst, f.negated, len);
+                *n++ = str_dst;
+                str_dst += len;
+            } else {
+                *n++ = NULL;
+            }
         }
         *n++ = NULL;
         *n = NULL;
@@ -180,26 +210,36 @@ s_binding *spec_bindings(p_spec spec)
     const char **vars;
     size_t vars_size;
     const char **v;
-    size_t count;
+    size_t count = 0;
+    size_t str_bytes = 0;
     if (!spec || !spec[0])
         return NULL;
-    count = spec_count_bindings(spec);
+    for (size_t i = 0; spec[i] || spec[i + 1]; i++) {
+        if (spec[i] && spec[i][0] == '?') {
+            count++;
+            str_bytes += strlen(spec[i]) + 1;
+        }
+    }
     if (count == SIZE_MAX || count + 1 > SIZE_MAX / sizeof(s_binding) || count > SIZE_MAX / sizeof(char *))
         return NULL;
     bindings_size = (count + 1) * sizeof(s_binding);
     vars_size = count * sizeof(char *);
-    if (bindings_size > SIZE_MAX - vars_size)
+    if (bindings_size > SIZE_MAX - vars_size || bindings_size + vars_size > SIZE_MAX - str_bytes)
         return NULL;
-    bindings = calloc(bindings_size + vars_size, 1);
+    bindings = calloc(bindings_size + vars_size + str_bytes, 1);
     if (!bindings)
         return NULL;
     vars = (const char **)(((char *)bindings) + bindings_size);
+    char *str_dst = ((char *)bindings) + bindings_size + vars_size;
     b = bindings;
     v = vars;
     while (spec[0] || spec[1]) {
         if (spec[0] && spec[0][0] == '?') {
-            b->name = spec[0];
+            size_t len = strlen(spec[0]) + 1;
+            memcpy(str_dst, spec[0], len);
+            b->name = str_dst;
             b->value = v;
+            str_dst += len;
             b++;
             v++;
         }
