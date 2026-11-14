@@ -31,14 +31,17 @@ typedef struct facts {
     /* deleted facts retain their index storage until the outer transaction ends. */
     s_fact *retired_facts;
     size_t retired_count;
+    void *fact_free_list;
+    size_t fact_free_count;
 
-    // Decoupled Transactions
+    /* decoupled transactions */
     s_transaction tx;
 
-    // Reactive semi-naive Datalog evaluation and truth maintenance.
+    /* reactive semi-naive datalog evaluation and truth maintenance */
     s_datalog_program *prog;
     int owns_prog;
     int disable_listener;
+    int justifications_staged_level;
     s_justification_graph *justifications;
     s_justification_graph *justifications_staging;
 } s_facts;
@@ -195,6 +198,7 @@ typedef struct facts_with_cursor {
     void *sorted_matches;
     size_t sorted_count;
     size_t sorted_pos;
+    const char **saved_values;
     int error;
 } s_facts_with_cursor;
 
@@ -246,6 +250,7 @@ void facts_apply_rollback_entry(s_facts *facts, const s_rollback_entry *entry);
 
 typedef struct entity {
     s_facts *facts;
+    Symbol subject_sym;
     const char *subject;
     int in_transaction;
 } s_entity;

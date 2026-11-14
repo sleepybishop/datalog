@@ -6,6 +6,7 @@
 #include "facts_internal.h"
 #include "justification.h"
 #include "lftj.h"
+#include "wyhash.h"
 
 static int program_has_negation(const s_datalog_program *prog);
 
@@ -105,8 +106,9 @@ static void eval_solution_cb(s_binding *bindings, void *user_data)
 
     if (data->main_facts->justifications_staging) {
         size_t support_count = data->rule->body_count;
-        s_justification_support *supports = support_count ? calloc(support_count, sizeof(*supports)) : NULL;
-        if (support_count && !supports) {
+        s_justification_support stack_supports[16];
+        s_justification_support *supports = (support_count <= 16) ? stack_supports : calloc(support_count, sizeof(*supports));
+        if (support_count > 16 && !supports) {
             *data->evaluation_error = 1;
             return;
         }
@@ -124,7 +126,8 @@ static void eval_solution_cb(s_binding *bindings, void *user_data)
         if (!valid || justification_graph_add(data->main_facts->justifications_staging, s_val, p_val, o_val, data->rule_index,
                                               supports, support_count) < 0)
             *data->evaluation_error = 1;
-        free(supports);
+        if (supports != stack_supports)
+            free(supports);
         if (*data->evaluation_error)
             return;
     }
@@ -909,46 +912,109 @@ typedef struct invalidation_event {
     char *p;
     char *o;
     int negated;
+    uint64_t hash;
 } s_invalidation_event;
 
-static void invalidation_events_destroy(s_invalidation_event *events, size_t count)
+typedef struct invalidation_queue {
+    s_invalidation_event *items;
+    size_t count;
+    size_t cap;
+    size_t *slots;
+    size_t slot_cap;
+} s_invalidation_queue;
+
+static uint64_t invalidation_hash(const char *s, const char *p, const char *o, int negated)
 {
-    for (size_t i = 0; i < count; i++) {
-        free(events[i].s);
-        free(events[i].p);
-        free(events[i].o);
-    }
-    free(events);
+    uint64_t h = wyhash(s, strlen(s), 0, _wyp);
+    h = wyhash(p, strlen(p), h, _wyp);
+    h = wyhash(o, strlen(o), h, _wyp);
+    return wyhash(&negated, sizeof(negated), h, _wyp);
 }
 
-static int invalidation_event_append(s_invalidation_event **events, size_t *count, const char *s, const char *p, const char *o,
-                                     int negated)
+static void invalidation_queue_destroy(s_invalidation_queue *q)
 {
-    for (size_t i = 0; i < *count; i++) {
-        if ((*events)[i].negated == negated && strcmp((*events)[i].s, s) == 0 && strcmp((*events)[i].p, p) == 0 &&
-            strcmp((*events)[i].o, o) == 0)
-            return 0;
+    for (size_t i = 0; i < q->count; i++) {
+        free(q->items[i].s);
     }
-    if (*count == SIZE_MAX / sizeof(**events))
+    free(q->items);
+    free(q->slots);
+    memset(q, 0, sizeof(*q));
+}
+
+static int invalidation_queue_append(s_invalidation_queue *q, const char *s, const char *p, const char *o, int negated)
+{
+    uint64_t hash = invalidation_hash(s, p, o, negated);
+    if (q->slot_cap > 0) {
+        size_t slot = (size_t)hash & (q->slot_cap - 1);
+        while (q->slots[slot]) {
+            const s_invalidation_event *ev = &q->items[q->slots[slot] - 1];
+            if (ev->hash == hash && ev->negated == negated && strcmp(ev->s, s) == 0 && strcmp(ev->p, p) == 0 &&
+                strcmp(ev->o, o) == 0)
+                return 0;
+            slot = (slot + 1) & (q->slot_cap - 1);
+        }
+    } else {
+        for (size_t i = 0; i < q->count; i++) {
+            if (q->items[i].hash == hash && q->items[i].negated == negated && strcmp(q->items[i].s, s) == 0 &&
+                strcmp(q->items[i].p, p) == 0 && strcmp(q->items[i].o, o) == 0)
+                return 0;
+        }
+    }
+
+    if (q->count == q->cap) {
+        size_t new_cap = q->cap ? q->cap * 2 : 16;
+        if (new_cap < q->cap || new_cap > SIZE_MAX / sizeof(*q->items))
+            return -1;
+        s_invalidation_event *resized = realloc(q->items, new_cap * sizeof(*resized));
+        if (!resized)
+            return -1;
+        q->items = resized;
+        q->cap = new_cap;
+    }
+
+    if (q->count >= 8 && (q->slot_cap == 0 || (q->count + 1) * 2 > q->slot_cap)) {
+        size_t new_scap = q->slot_cap ? q->slot_cap * 2 : 32;
+        if (new_scap > SIZE_MAX / sizeof(*q->slots))
+            return -1;
+        size_t *slots = calloc(new_scap, sizeof(*slots));
+        if (!slots)
+            return -1;
+        for (size_t i = 0; i < q->count; i++) {
+            size_t sl = (size_t)q->items[i].hash & (new_scap - 1);
+            while (slots[sl])
+                sl = (sl + 1) & (new_scap - 1);
+            slots[sl] = i + 1;
+        }
+        free(q->slots);
+        q->slots = slots;
+        q->slot_cap = new_scap;
+    }
+
+    size_t l1 = strlen(s) + 1;
+    size_t l2 = strlen(p) + 1;
+    size_t l3 = strlen(o) + 1;
+    if (l1 > SIZE_MAX - l2 || l1 + l2 > SIZE_MAX - l3)
         return -1;
-    s_invalidation_event *resized = realloc(*events, (*count + 1) * sizeof(**events));
-    if (!resized)
+    char *buf = malloc(l1 + l2 + l3);
+    if (!buf)
         return -1;
-    *events = resized;
-    s_invalidation_event *event = &resized[*count];
-    memset(event, 0, sizeof(*event));
-    event->s = strdup(s);
-    event->p = strdup(p);
-    event->o = strdup(o);
+    memcpy(buf, s, l1);
+    memcpy(buf + l1, p, l2);
+    memcpy(buf + l1 + l2, o, l3);
+
+    s_invalidation_event *event = &q->items[q->count];
+    event->s = buf;
+    event->p = buf + l1;
+    event->o = buf + l1 + l2;
     event->negated = negated;
-    if (!event->s || !event->p || !event->o) {
-        free(event->s);
-        free(event->p);
-        free(event->o);
-        memset(event, 0, sizeof(*event));
-        return -1;
+    event->hash = hash;
+    if (q->slot_cap > 0) {
+        size_t sl = (size_t)hash & (q->slot_cap - 1);
+        while (q->slots[sl])
+            sl = (sl + 1) & (q->slot_cap - 1);
+        q->slots[sl] = q->count + 1;
     }
-    (*count)++;
+    q->count++;
     return 0;
 }
 
@@ -963,14 +1029,14 @@ static int external_justification_support(const s_justification_support *support
 }
 
 static int invalidation_collect_conclusions(s_justification_graph *graph, const char *s, const char *p, const char *o, int negated,
-                                            s_invalidation_event **candidates, size_t *candidate_count)
+                                            s_invalidation_queue *candidates)
 {
     s_justification_support *conclusions = NULL;
     size_t conclusion_count = 0;
     int result = justification_graph_remove_support(graph, s, p, o, negated, &conclusions, &conclusion_count);
     for (size_t i = 0; result >= 0 && i < conclusion_count; i++) {
         const s_justification_support *conclusion = &conclusions[i];
-        if (invalidation_event_append(candidates, candidate_count, conclusion->s, conclusion->p, conclusion->o, 0) != 0)
+        if (invalidation_queue_append(candidates, conclusion->s, conclusion->p, conclusion->o, 0) != 0)
             result = -1;
     }
     justification_support_array_destroy(conclusions, conclusion_count);
@@ -980,10 +1046,8 @@ static int invalidation_collect_conclusions(s_justification_graph *graph, const 
 static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entry *entries, size_t entry_count,
                                            int *requires_closure_scan)
 {
-    s_invalidation_event *events = NULL;
-    size_t event_count = 0;
-    s_invalidation_event *candidates = NULL;
-    size_t candidate_count = 0;
+    s_invalidation_queue events = {0};
+    s_invalidation_queue candidates = {0};
     s_justification_grounding *grounding = NULL;
     int has_negation = program_has_negation(facts->prog);
     *requires_closure_scan = 0;
@@ -998,15 +1062,15 @@ static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entr
         if (entries[i].action == ROLLBACK_ADD && !found) {
             if (has_negation)
                 *requires_closure_scan = 1;
-            if (invalidation_event_append(&events, &event_count, s, p, o, 0) != 0)
+            if (invalidation_queue_append(&events, s, p, o, 0) != 0)
                 goto error;
         } else if (entries[i].action == ROLLBACK_REMOVE && found) {
-            if (invalidation_event_append(&events, &event_count, s, p, o, 1) != 0)
+            if (invalidation_queue_append(&events, s, p, o, 1) != 0)
                 goto error;
         } else if (entries[i].action == ROLLBACK_STATE && entries[i].fact.asserted_count && found && !support.asserted) {
             /* losing asserted support can unground a recursive component even
              * while its tuples still carry derived support. */
-            if (invalidation_event_append(&events, &event_count, s, p, o, 2) != 0)
+            if (invalidation_queue_append(&events, s, p, o, 2) != 0)
                 goto error;
         }
     }
@@ -1014,37 +1078,41 @@ static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entr
     /* apply every base invalidation before computing a grounded closure; a
      * proof that refers to a removed tuple must not seed that closure merely
      * because some other proof for the removed tuple remains in the graph. */
-    for (size_t cursor = 0; cursor < event_count; cursor++) {
-        if (events[cursor].negated == 2) {
-            if (invalidation_event_append(&candidates, &candidate_count, events[cursor].s, events[cursor].p, events[cursor].o, 0) !=
+    for (size_t cursor = 0; cursor < events.count; cursor++) {
+        if (events.items[cursor].negated == 2) {
+            if (invalidation_queue_append(&candidates, events.items[cursor].s, events.items[cursor].p, events.items[cursor].o, 0) !=
                 0)
                 goto error;
-        } else if (invalidation_collect_conclusions(facts->justifications_staging, events[cursor].s, events[cursor].p,
-                                                    events[cursor].o, events[cursor].negated, &candidates, &candidate_count) != 0) {
+        } else if (invalidation_collect_conclusions(facts->justifications_staging, events.items[cursor].s, events.items[cursor].p,
+                                                    events.items[cursor].o, events.items[cursor].negated, &candidates) != 0) {
             goto error;
         }
     }
 
-    if (candidate_count) {
+    if (candidates.count) {
         grounding = new_justification_grounding(facts->justifications_staging, external_justification_support, facts);
         if (!grounding)
             goto error;
     }
-    for (size_t cursor = 0; cursor < candidate_count; cursor++) {
-        const s_invalidation_event *conclusion = &candidates[cursor];
-        if (justification_grounding_contains(grounding, conclusion->s, conclusion->p, conclusion->o))
+    for (size_t cursor = 0; cursor < candidates.count; cursor++) {
+        /* note: invalidation_collect_conclusions may realloc candidates.items,
+         * so index candidates.items[cursor] freshly rather than holding a pointer across append. */
+        if (justification_grounding_contains(grounding, candidates.items[cursor].s, candidates.items[cursor].p,
+                                             candidates.items[cursor].o))
             continue;
         s_fact_support support;
-        int found = facts_get_support_spo(facts, conclusion->s, conclusion->p, conclusion->o, &support);
+        int found = facts_get_support_spo(facts, candidates.items[cursor].s, candidates.items[cursor].p, candidates.items[cursor].o,
+                                          &support);
         if (found < 0)
             goto error;
         if (found > 0 && support.derived) {
             int disappears = support.asserted == 0;
-            if (facts_remove_spo_origin(facts, conclusion->s, conclusion->p, conclusion->o, FACT_ORIGIN_DERIVED) < 0)
+            if (facts_remove_spo_origin(facts, candidates.items[cursor].s, candidates.items[cursor].p, candidates.items[cursor].o,
+                                        FACT_ORIGIN_DERIVED) < 0)
                 goto error;
             if (disappears) {
-                if (invalidation_collect_conclusions(facts->justifications_staging, conclusion->s, conclusion->p, conclusion->o, 0,
-                                                     &candidates, &candidate_count) != 0)
+                if (invalidation_collect_conclusions(facts->justifications_staging, candidates.items[cursor].s,
+                                                     candidates.items[cursor].p, candidates.items[cursor].o, 0, &candidates) != 0)
                     goto error;
                 /* positive cascades only discard ungrounded conclusions and
                  * proofs that use them, leaving this snapshot valid. with
@@ -1062,14 +1130,14 @@ static int facts_invalidate_justifications(s_facts *facts, const s_rollback_entr
         }
     }
     delete_justification_grounding(grounding);
-    invalidation_events_destroy(candidates, candidate_count);
-    invalidation_events_destroy(events, event_count);
+    invalidation_queue_destroy(&candidates);
+    invalidation_queue_destroy(&events);
     return 0;
 
 error:
     delete_justification_grounding(grounding);
-    invalidation_events_destroy(candidates, candidate_count);
-    invalidation_events_destroy(events, event_count);
+    invalidation_queue_destroy(&candidates);
+    invalidation_queue_destroy(&events);
     return -1;
 }
 

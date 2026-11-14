@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
 #include <assert.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +36,7 @@ typedef struct {
     e_token_type type;
     char *value;
     int is_prefixed_name;
+    int is_bare;
 } s_token;
 
 typedef struct {
@@ -74,6 +77,7 @@ static s_token next_token(const char **p)
     s_token t;
     t.value = NULL;
     t.is_prefixed_name = 0;
+    t.is_bare = 0;
 
     while (**p && (**p == ' ' || **p == '\t' || **p == '\r' || **p == '\n')) {
         (*p)++;
@@ -255,6 +259,7 @@ static s_token next_token(const char **p)
             t.type = TOKEN_CONST;
             t.value = word;
             t.is_prefixed_name = strchr(word, ':') != NULL;
+            t.is_bare = 1;
         }
         return t;
     }
@@ -429,6 +434,23 @@ static void free_query(s_sparql_query *q)
     }
 }
 
+static int parse_nonneg_long(const s_token *tok, long *out)
+{
+    if (!tok || tok->type != TOKEN_CONST || !tok->is_bare || !tok->value || tok->value[0] == '\0')
+        return -1;
+    for (const char *c = tok->value; *c; c++) {
+        if (*c < '0' || *c > '9')
+            return -1;
+    }
+    errno = 0;
+    char *end = NULL;
+    long val = strtol(tok->value, &end, 10);
+    if (errno == ERANGE || !end || *end != '\0' || val < 0)
+        return -1;
+    *out = val;
+    return 0;
+}
+
 static s_sparql_query *parse_query(s_token_stream *stream)
 {
     s_sparql_query *q = calloc(1, sizeof(s_sparql_query));
@@ -593,17 +615,15 @@ static s_sparql_query *parse_query(s_token_stream *stream)
            stream->tokens[stream->pos].type == TOKEN_ORDER) {
         if (stream->tokens[stream->pos].type == TOKEN_LIMIT) {
             stream->pos++;
-            if (stream->tokens[stream->pos].type != TOKEN_CONST) {
+            if (parse_nonneg_long(&stream->tokens[stream->pos], &q->limit) != 0) {
                 goto error;
             }
-            q->limit = atol(stream->tokens[stream->pos].value);
             stream->pos++;
         } else if (stream->tokens[stream->pos].type == TOKEN_OFFSET) {
             stream->pos++;
-            if (stream->tokens[stream->pos].type != TOKEN_CONST) {
+            if (parse_nonneg_long(&stream->tokens[stream->pos], &q->offset) != 0) {
                 goto error;
             }
-            q->offset = atol(stream->tokens[stream->pos].value);
             stream->pos++;
         } else if (stream->tokens[stream->pos].type == TOKEN_ORDER) {
             stream->pos++;

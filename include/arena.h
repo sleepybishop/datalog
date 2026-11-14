@@ -8,6 +8,8 @@ void arena_destroy(void);
 
 void *arena_alloc_fact(void);
 void arena_free_fact(void *ptr);
+size_t arena_alloc_fact_batch(void **out_head, size_t max_count);
+void arena_free_fact_list(void *head, size_t count);
 
 typedef struct rax_arena s_rax_arena;
 

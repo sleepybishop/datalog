@@ -9,7 +9,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-// Mock types to match Check API
+/* mock types to match check API */
 typedef struct Suite Suite;
 typedef struct TCase TCase;
 typedef struct SRunner SRunner;
@@ -187,7 +187,7 @@ static inline void srunner_run_all(SRunner *sr, int mode)
                 exit(1);
             }
             if (pid == 0) {
-                // Child process: run setup, test, and teardown
+                /* child process: run setup, test, and teardown */
                 if (tc->setup)
                     tc->setup();
                 tc->tests[j]();
@@ -195,7 +195,7 @@ static inline void srunner_run_all(SRunner *sr, int mode)
                     tc->teardown();
                 exit(0);
             } else {
-                // Parent process: wait for child
+                /* parent process: wait for child */
                 int status;
                 waitpid(pid, &status, 0);
                 if (WIFEXITED(status)) {

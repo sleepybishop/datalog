@@ -10,7 +10,6 @@ void fact_init(s_fact *f, Symbol s, Symbol p, Symbol o)
     f->s = s;
     f->p = p;
     f->o = o;
-    f->negated = NULL;
     f->asserted_count = 1;
     f->derived_count = 0;
     f->retirement_queued = 0;
@@ -20,16 +19,8 @@ void fact_init(s_fact *f, Symbol s, Symbol p, Symbol o)
 s_fact *new_fact(Symbol s, Symbol p, Symbol o)
 {
     s_fact *fact = arena_alloc_fact();
-    if (fact) {
-        fact->s = s;
-        fact->p = p;
-        fact->o = o;
-        fact->negated = NULL;
-        fact->asserted_count = 1;
-        fact->derived_count = 0;
-        fact->retirement_queued = 0;
-        fact->retired_next = NULL;
-    }
+    if (fact)
+        fact_init(fact, s, p, o);
     return fact;
 }
 
@@ -131,11 +122,4 @@ s_fact_list *fact_list_find(s_fact_list *fl, s_fact *f)
     while (fl && fl->fact != f)
         fl = fl->next;
     return fl;
-}
-
-s_fact_list *fact_list_intern(s_fact_list *fl, s_fact *f)
-{
-    if (fact_list_find(fl, f))
-        return fl;
-    return new_fact_list(f, fl);
 }

@@ -1444,7 +1444,7 @@ int has_value(const char **arr, int size, const char *val)
 
 START_TEST(test_nolan_scifi)
 {
-    // Find Sci-Fi movies directed by Christopher Nolan
+    /* find sci-fi movies directed by christopher nolan */
     const char *movie;
     s_binding bindings[] = {{"?movie", &movie}, {NULL, NULL}};
     s_facts_with_cursor cur;
@@ -1469,7 +1469,7 @@ END_TEST
 
 START_TEST(test_dicaprio_movies)
 {
-    // Find all movies starring Leonardo DiCaprio
+    /* find all movies starring leonardo dicaprio */
     const char *movie;
     s_binding bindings[] = {{"?movie", &movie}, {NULL, NULL}};
     s_facts_with_cursor cur;
@@ -1497,7 +1497,7 @@ END_TEST
 
 START_TEST(test_dicaprio_directors)
 {
-    // Find directors who directed Leonardo DiCaprio
+    /* find directors who directed leonardo dicaprio */
     const char *movie;
     const char *director;
     s_binding bindings[] = {{"?movie", &movie}, {"?director", &director}, {NULL, NULL}};
@@ -1528,8 +1528,7 @@ END_TEST
 
 START_TEST(test_matrix_actors)
 {
-    // Find all actors who starred in Memento and The Matrix
-    // Carrie-Anne Moss is in both
+    /* find all actors who starred in memento and the matrix (carrie-anne moss is in both) */
     const char *actor;
     s_binding bindings[] = {{"?actor", &actor}, {NULL, NULL}};
     s_facts_with_cursor cur;
@@ -1552,7 +1551,7 @@ END_TEST
 
 START_TEST(test_year_filter)
 {
-    // Find movies released in 2010 or later
+    /* find movies released in 2010 or later */
     const char *movie;
     s_binding bindings[] = {{"?movie", &movie}, {NULL, NULL}};
     s_facts_with_cursor cur;
@@ -1572,12 +1571,12 @@ START_TEST(test_year_filter)
     facts_with_cursor_destroy(&cur);
 
     ck_assert_int_eq(6, count);
-    ck_assert(has_value(results, count, "Inception"));               // 2010
-    ck_assert(has_value(results, count, "Interstellar"));            // 2014
-    ck_assert(has_value(results, count, "Django Unchained"));        // 2012
-    ck_assert(has_value(results, count, "John Wick"));               // 2014
-    ck_assert(has_value(results, count, "The Wolf of Wall Street")); // 2013
-    ck_assert(has_value(results, count, "Shutter Island"));          // 2010
+    ck_assert(has_value(results, count, "Inception"));               /* 2010 */
+    ck_assert(has_value(results, count, "Interstellar"));            /* 2014 */
+    ck_assert(has_value(results, count, "Django Unchained"));        /* 2012 */
+    ck_assert(has_value(results, count, "John Wick"));               /* 2014 */
+    ck_assert(has_value(results, count, "The Wolf of Wall Street")); /* 2013 */
+    ck_assert(has_value(results, count, "Shutter Island"));          /* 2010 */
 }
 END_TEST
 

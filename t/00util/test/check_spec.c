@@ -89,13 +89,13 @@ END_TEST
 START_TEST(test_spec_sort)
 {
     const char *spec_data[] = {"?a", "b", "?c", NULL, "x", "y", "z", NULL, NULL};
-    // Create a mutable copy of the spec since spec_sort modifies it in-place
+    /* create a mutable copy of the spec since spec_sort modifies it in-place */
     p_spec spec = malloc(sizeof(spec_data));
     memcpy(spec, spec_data, sizeof(spec_data));
 
     p_spec sorted = spec_sort(spec);
     ck_assert(sorted);
-    // The 0-variable fact {"x", "y", "z"} should be sorted before the 2-variable fact {"?a", "b", "?c"}
+    /* the 0-variable fact {"x", "y", "z"} should be sorted before the 2-variable fact {"?a", "b", "?c"} */
     ck_assert_str_eq("x", sorted[0]);
     ck_assert_str_eq("y", sorted[1]);
     ck_assert_str_eq("z", sorted[2]);
@@ -106,6 +106,37 @@ START_TEST(test_spec_sort)
     ck_assert(!sorted[7]);
     ck_assert(!sorted[8]);
     free(spec);
+}
+END_TEST
+
+START_TEST(test_spec_cursor_negated_expanded)
+{
+    s_spec_cursor c;
+    s_spec_fact f;
+
+    /* 5-slot NULL-terminated :not clause */
+    spec_cursor_init(&c, (const char *[]){"?s", "p", "o", ":not", NULL, "?s", "q", "r", NULL, NULL});
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert_str_eq("?s", f.s);
+    ck_assert_str_eq("p", f.p);
+    ck_assert_str_eq("o", f.o);
+    ck_assert_str_eq(":not", f.negated);
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert_str_eq("?s", f.s);
+    ck_assert_str_eq("q", f.p);
+    ck_assert_str_eq("r", f.o);
+    ck_assert(f.negated == NULL);
+    ck_assert(!spec_cursor_next(&c, &f));
+
+    /* 4-slot spec_expand / spec_copy_expanded :not clause */
+    spec_cursor_init(&c, (const char *[]){"?s", "p", "o", ":not", "?s", "q", "r", NULL, NULL, NULL});
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert_str_eq("?s", f.s);
+    ck_assert_str_eq(":not", f.negated);
+    ck_assert(spec_cursor_next(&c, &f));
+    ck_assert_str_eq("q", f.p);
+    ck_assert(f.negated == NULL);
+    ck_assert(!spec_cursor_next(&c, &f));
 }
 END_TEST
 
@@ -130,6 +161,7 @@ Suite *spec_suite(void)
     tcase_add_test(tc_cursor, test_spec_cursor_empty);
     tcase_add_test(tc_cursor, test_spec_cursor_one);
     tcase_add_test(tc_cursor, test_spec_cursor_two);
+    tcase_add_test(tc_cursor, test_spec_cursor_negated_expanded);
     suite_add_tcase(s, tc_cursor);
 
     tc_logic = tcase_create("Logic");

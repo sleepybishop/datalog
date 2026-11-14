@@ -11,22 +11,7 @@ typedef struct justification_support {
     int negated;
 } s_justification_support;
 
-typedef struct justification {
-    char *s;
-    char *p;
-    char *o;
-    size_t rule_index;
-    s_justification_support *supports;
-    size_t support_count;
-    uint64_t conclusion_hash;
-    uint64_t hash;
-} s_justification;
-
-typedef struct justification_graph {
-    s_justification *items;
-    size_t count;
-    size_t capacity;
-} s_justification_graph;
+typedef struct justification_graph s_justification_graph;
 
 s_justification_graph *new_justification_graph(void);
 s_justification_graph *justification_graph_clone(const s_justification_graph *graph);
@@ -37,7 +22,7 @@ int justification_graph_add(s_justification_graph *graph, const char *s, const c
 size_t justification_graph_count(const s_justification_graph *graph, const char *s, const char *p, const char *o);
 
 /*
- * Remove every proof depending on the grounded support. On success,
+ * remove every proof depending on the grounded support. on success,
  * *conclusions_out owns a deduplicated array of affected conclusion triples;
  * release it with justification_support_array_destroy().
  */

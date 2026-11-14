@@ -130,27 +130,24 @@ int read_fact(s_facts *facts, s_fact *f, char *buf, size_t buf_sz, FILE *fp)
     assert(f);
     assert(buf);
     assert(buf_sz > 0);
-    f->negated = NULL;
-    if (read_string(buf, buf_sz, fp))
+    memset(f, 0, sizeof(*f));
+    if (read_string(buf, buf_sz, fp) || !buf[0] || !(f->s = facts_intern(facts, buf)))
         return -1;
-    if (!buf[0])
+    if (read_string(buf, buf_sz, fp) || !buf[0] || !(f->p = facts_intern(facts, buf))) {
+        facts_unintern(facts, f->s);
         return -1;
-    if (!(f->s = facts_intern(facts, buf)))
+    }
+    if (read_string(buf, buf_sz, fp) || !buf[0] || !(f->o = facts_intern(facts, buf))) {
+        facts_unintern(facts, f->p);
+        facts_unintern(facts, f->s);
         return -1;
-    if (read_string(buf, buf_sz, fp))
+    }
+    if (getc_unlocked(fp) != '\n') {
+        facts_unintern(facts, f->o);
+        facts_unintern(facts, f->p);
+        facts_unintern(facts, f->s);
         return -1;
-    if (!buf[0])
-        return -1;
-    if (!(f->p = facts_intern(facts, buf)))
-        return -1;
-    if (read_string(buf, buf_sz, fp))
-        return -1;
-    if (!buf[0])
-        return -1;
-    if (!(f->o = facts_intern(facts, buf)))
-        return -1;
-    if (getc_unlocked(fp) != '\n')
-        return -1;
+    }
     return 0;
 }
 

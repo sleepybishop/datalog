@@ -8,7 +8,7 @@ START_TEST(test_rule_create_and_validate_safe)
     s_datalog_program *prog = new_datalog_program();
     ck_assert(prog);
 
-    // Rule: ?x <path> ?y :- ?x <edge> ?y .
+    /* rule: ?x <path> ?y :- ?x <edge> ?y . */
     s_spec_fact head = {"?x", "path", "?y", NULL};
     s_spec_fact body[] = {{"?x", "edge", "?y", NULL}};
 
@@ -24,7 +24,7 @@ START_TEST(test_rule_validate_unsafe_head)
 {
     s_datalog_program *prog = new_datalog_program();
 
-    // Rule: ?x <path> ?y :- ?x <edge> ?z . (unsafe: ?y not in body)
+    /* rule: ?x <path> ?y :- ?x <edge> ?z . (unsafe: ?y not in body) */
     s_spec_fact head = {"?x", "path", "?y", NULL};
     s_spec_fact body[] = {{"?x", "edge", "?z", NULL}};
 
@@ -40,7 +40,7 @@ START_TEST(test_rule_validate_unsafe_negated)
 {
     s_datalog_program *prog = new_datalog_program();
 
-    // Rule: ?x <unreachable> ?y :- ?x <node> ?z, NOT( ?z <edge> ?y ) . (unsafe: ?y not in positive body subgoals)
+    /* rule: ?x <unreachable> ?y :- ?x <node> ?z, NOT( ?z <edge> ?y ) . (unsafe: ?y not in positive body subgoals) */
     s_spec_fact head = {"?x", "unreachable", "?y", NULL};
     s_spec_fact body[] = {{"?x", "node", "?z", NULL}, {"?z", "edge", "?y", ":not"}};
 
@@ -56,8 +56,7 @@ START_TEST(test_rule_validate_safe_negated)
 {
     s_datalog_program *prog = new_datalog_program();
 
-    // Rule: ?x <unreachable> ?y :- ?x <node> ?z, ?z <node> ?y, NOT( ?z <edge> ?y ) . (safe: ?y is in positive body subgoal "?z
-    // <node> ?y")
+    /* rule: ?x <unreachable> ?y :- ?x <node> ?z, ?z <node> ?y, NOT( ?z <edge> ?y ) . (safe: ?y in positive subgoal) */
     s_spec_fact head = {"?x", "unreachable", "?y", NULL};
     s_spec_fact body[] = {{"?x", "node", "?z", NULL}, {"?z", "node", "?y", NULL}, {"?z", "edge", "?y", ":not"}};
 
@@ -112,19 +111,19 @@ START_TEST(test_rule_parse_failure)
 {
     s_datalog_program *prog = new_datalog_program();
 
-    // 1. Syntax error (missing head object)
+    /* 1. syntax error (missing head object) */
     ck_assert_int_eq(-1, datalog_program_parse_rules(prog, "?x <path> :- ?x <edge> ?y ."));
     ck_assert_int_eq(0, prog->rule_count);
 
-    // 2. Safety error (unsafe rule head variable)
+    /* 2. safety error (unsafe rule head variable) */
     ck_assert_int_eq(-1, datalog_program_parse_rules(prog, "?x <path> ?y :- ?x <edge> ?z ."));
     ck_assert_int_eq(0, prog->rule_count);
 
-    // 3. A later invalid rule rolls back earlier rules from the same parse call.
+    /* 3. a later invalid rule rolls back earlier rules from the same parse call */
     ck_assert_int_eq(-1, datalog_program_parse_rules(prog, "?x <ok> ?y :- ?x <edge> ?y . ?x <bad> ?y :- ?x <edge> ?z ."));
     ck_assert_int_eq(0, prog->rule_count);
 
-    // Rules that predate a failed parse call remain intact.
+    /* rules that predate a failed parse call remain intact */
     ck_assert_int_eq(0, datalog_program_parse_rules(prog, "?x <ok> ?y :- ?x <edge> ?y ."));
     ck_assert_int_eq(-1, datalog_program_parse_rules(prog, "?x <bad> ?y :- ?x <edge> ?z ."));
     ck_assert_int_eq(1, prog->rule_count);
@@ -168,9 +167,9 @@ START_TEST(test_rule_stratification_negation_success)
     int *rule_strata = datalog_program_stratify(prog, &num_strata);
     ck_assert(rule_strata);
     ck_assert_int_eq(2, num_strata);
-    ck_assert_int_eq(0, rule_strata[2]); // s :- t is stratum 0
-    ck_assert_int_eq(1, rule_strata[1]); // q :- r, NOT s is stratum 1
-    ck_assert_int_eq(1, rule_strata[0]); // p :- q is stratum 1
+    ck_assert_int_eq(0, rule_strata[2]); /* s :- t is stratum 0 */
+    ck_assert_int_eq(1, rule_strata[1]); /* q :- r, NOT s is stratum 1 */
+    ck_assert_int_eq(1, rule_strata[0]); /* p :- q is stratum 1 */
 
     free(rule_strata);
     delete_datalog_program(prog);

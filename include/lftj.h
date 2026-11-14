@@ -10,7 +10,7 @@
 struct facts;
 struct fact;
 
-/* Iterator */
+/* iterator */
 typedef struct lftj_iterator {
     struct rax *symbols;
     raxIterator it;

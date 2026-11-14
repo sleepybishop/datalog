@@ -18,7 +18,6 @@ lib/spec.o\
 lib/rule.o\
 lib/eval.o\
 lib/justification.o\
-lib/magic.o\
 lib/linda.o
 
 
@@ -37,7 +36,6 @@ t/00util/test/check_movie_integration\
 t/00util/test/check_sparql\
 t/00util/test/check_rule\
 t/00util/test/check_eval\
-t/00util/test/check_magic\
 t/00util/test/check_linda
 
 
@@ -111,8 +109,6 @@ t/00util/test/check_rule: t/00util/test/check_rule.o $(OBJ)
 
 t/00util/test/check_eval: t/00util/test/check_eval.o $(OBJ)
 
-t/00util/test/check_magic: t/00util/test/check_magic.o $(OBJ)
-
 t/00util/test/check_linda: t/00util/test/check_linda.o $(OBJ)
 
 
@@ -132,7 +128,7 @@ clean:
 
 
 indent:
-	find -name '*.[h,c]' | xargs clang-format -i
+	find . -path ./deps -prune -o -name '*.[hc]' -print | xargs clang-format -i
 
 scan:
 	scan-build $(MAKE) clean all
@@ -141,8 +137,10 @@ check-asan:
 	ASAN_OPTIONS=detect_leaks=0 $(MAKE) -B check CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
 
 check-tsan:
-	$(MAKE) -B t/00util/test/check_linda t/00util/test/check_storage_failures CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
+	$(MAKE) -B t/00util/test/check_linda t/00util/test/check_storage_failures t/00util/test/check_facts t/00util/test/check_eval CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
 	./t/00util/test/check_linda
 	./t/00util/test/check_storage_failures
+	cd t/00util/test && ./check_facts
+	./t/00util/test/check_eval
 
 .PHONY: all check check-asan check-tsan clean indent scan

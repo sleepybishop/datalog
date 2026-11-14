@@ -12,9 +12,8 @@ static size_t set_wyhash(const void *key, size_t len)
 
 void set_init(s_set *set, size_t max)
 {
-    int result = set_init_checked(set, max);
-    assert(result == 0);
-    (void)result;
+    if (set_init_checked(set, max) != 0)
+        abort();
 }
 
 int set_init_checked(s_set *set, size_t max)
@@ -78,8 +77,8 @@ s_set_item *set_add_h(s_set *set, void *data, size_t len, size_t hash)
     assert(data);
     assert(len > 0);
 
-    /* keep load factor <= 50% for optimal performance under linear probing */
-    if (set->count * 2 >= set->max) {
+    /* keep load factor <= 50% and guarantee at least one empty slot */
+    if (set->count >= set->max / 2) {
         if (set->max > SIZE_MAX / 2 || set_resize_checked(set, set->max * 2) != 0)
             return NULL;
     }
@@ -187,9 +186,8 @@ s_set_item *set_get_h(s_set *set, const void *data, size_t len, size_t hash)
 
 void set_resize(s_set *set, size_t max)
 {
-    int result = set_resize_checked(set, max);
-    assert(result == 0);
-    (void)result;
+    if (set_resize_checked(set, max) != 0)
+        abort();
 }
 
 int set_resize_checked(s_set *set, size_t max)
@@ -198,42 +196,29 @@ int set_resize_checked(s_set *set, size_t max)
         return -1;
     if (max == set->max)
         return 0;
-    if (max < set->count)
+    if (max <= set->count)
         return -1;
-
-    s_set_item *old_items = set->items;
-    size_t old_max = set->max;
 
     s_set_item *new_items = calloc(max, sizeof(s_set_item));
     if (!new_items)
         return -1;
-    set->max = max;
-    set->items = new_items;
-    set->count = 0;
-    set->collisions = 0;
 
-    for (size_t i = 0; i < old_max; i++) {
-        if (old_items[i].len > 0) {
-            s_set_item *new_item = set_add_h(set, old_items[i].data, old_items[i].len, old_items[i].hash);
-            if (!new_item) {
-                free(set->items);
-                set->items = old_items;
-                set->max = old_max;
-                set->count = 0;
-                set->collisions = 0;
-                for (size_t j = 0; j < old_max; j++) {
-                    if (old_items[j].len > 0) {
-                        set->count++;
-                        if (j != old_items[j].hash % old_max)
-                            set->collisions++;
-                    }
-                }
-                return -1;
-            }
-            new_item->usage = old_items[i].usage;
+    size_t collisions = 0;
+    for (size_t i = 0; i < set->max; i++) {
+        if (set->items[i].len > 0) {
+            size_t h = set->items[i].hash;
+            size_t slot = h % max;
+            while (new_items[slot].len > 0)
+                slot = (slot + 1) % max;
+            if (slot != h % max)
+                collisions++;
+            new_items[slot] = set->items[i];
         }
     }
-    free(old_items);
+    free(set->items);
+    set->items = new_items;
+    set->max = max;
+    set->collisions = collisions;
     return 0;
 }
 

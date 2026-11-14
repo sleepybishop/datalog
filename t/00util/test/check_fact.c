@@ -1,6 +1,7 @@
 #include <check.h>
 #include <stdlib.h>
 #include "fact.h"
+#include "facts.h"
 #include "intern.h"
 
 static s_intern *test_intern = NULL;
@@ -225,6 +226,21 @@ START_TEST(test_fact_compare_osp)
 }
 END_TEST
 
+START_TEST(test_standalone_fact_outlives_facts_db)
+{
+    s_facts *db = new_facts(NULL, 16);
+    ck_assert(db != NULL);
+    ck_assert(facts_add_spo(db, "x", "y", "z") != NULL);
+    s_fact *f = new_fact("a", "b", "c");
+    ck_assert(f != NULL);
+    delete_facts(db);
+    ck_assert_str_eq(symbol_to_str(f->s), "a");
+    ck_assert_str_eq(symbol_to_str(f->p), "b");
+    ck_assert_str_eq(symbol_to_str(f->o), "c");
+    delete_fact(f);
+}
+END_TEST
+
 Suite *fact_suite(void)
 {
     Suite *s;
@@ -234,6 +250,7 @@ Suite *fact_suite(void)
     tc_init = tcase_create("Init");
     tcase_add_test(tc_init, test_fact_init);
     tcase_add_test(tc_init, test_new_fact);
+    tcase_add_test(tc_init, test_standalone_fact_outlives_facts_db);
     suite_add_tcase(s, tc_init);
     tc_compare = tcase_create("Compare");
     tcase_add_test(tc_compare, test_fact_compare_spo);

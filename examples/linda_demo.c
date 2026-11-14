@@ -44,14 +44,14 @@ int main()
 
     pthread_t prod, cons;
 
-    // 1. Thread coordination: Producer/Consumer
+    /* 1. thread coordination: producer/consumer */
     pthread_create(&cons, NULL, consumer_thread, space);
     pthread_create(&prod, NULL, producer_thread, space);
 
     pthread_join(cons, NULL);
     pthread_join(prod, NULL);
 
-    // 2. Parallel computation: eval()
+    /* 2. parallel computation: eval() */
     printf("\n[Main] Spawning parallel worker via eval()...\n");
     linda_eval(space, worker_square, space);
 
@@ -61,7 +61,7 @@ int main()
     assert(rc == 0);
     printf("[Main] Found result! 9 squared = %s\n", val);
 
-    // 3. Non-blocking checking: rdp/inp
+    /* 3. non-blocking checking: rdp/inp */
     printf("\n[Main] Checking non-blocking rdp...\n");
     int found = linda_rdp(space, "result", "9", "81", NULL, 0, NULL, 0, NULL, 0);
     printf("[Main] rdp('result', '9', '81') found = %d (expected 1)\n", found);

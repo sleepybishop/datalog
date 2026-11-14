@@ -11,5 +11,7 @@ void facts_justifications_commit(s_facts *facts);
 void facts_justifications_discard(s_facts *facts);
 int facts_reset_local_db(s_facts *facts);
 void facts_reclaim_retired(s_facts *facts);
+Symbol facts_intern_ref(s_facts *facts, Symbol sym);
+void facts_rollback_pop_discard(s_facts *facts);
 
 #endif

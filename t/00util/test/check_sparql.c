@@ -109,7 +109,7 @@ START_TEST(test_clue_murder_mystery)
     s_facts *facts = new_facts(sym, 100);
     ck_assert(facts != NULL);
 
-    // Setup the Clue mystery facts
+    /* setup the clue mystery facts */
     facts_add_spo(facts, "mustard", "location", "library");
     facts_add_spo(facts, "plum", "location", "study");
     facts_add_spo(facts, "scarlett", "location", "kitchen");
@@ -119,9 +119,7 @@ START_TEST(test_clue_murder_mystery)
     facts_add_spo(facts, "plum", "owns", "candlestick");
     facts_add_spo(facts, "scarlett", "owns", "lead_pipe");
 
-    // SPARQL query to solve the mystery:
-    // Find the suspect who was in the same room where the victim was found,
-    // where the weapon was also found, and the suspect owns/had access to that weapon.
+    /* find suspect in victim's room who owns the weapon found there */
     const char *suspect;
     const char *weapon;
     const char *room;
@@ -172,7 +170,7 @@ START_TEST(test_sparql_prefix)
     ck_assert_int_eq(count, 1);
     facts_with_cursor_destroy(&c);
 
-    // Test with default/empty prefix
+    /* test with default/empty prefix */
     rc = facts_sparql(g_f, bindings, &c,
                       "PREFIX : <http://example.org/> "
                       "PREFIX foaf: <http://xmlns.com/foaf/0.1/> "
@@ -309,7 +307,7 @@ START_TEST(test_sparql_rule_engine)
     s_binding bindings[] = {{"?rule", &rule},   {"?action", &action}, {"?src", &src},
                             {"?proto", &proto}, {"?port", &port},     {NULL, NULL}};
 
-    // 1. Setup Rule database facts
+    /* 1. setup rule database facts */
     facts_add_spo(g_f, "rule1", "source", "ANY");
     facts_add_spo(g_f, "rule1", "proto", "TCP");
     facts_add_spo(g_f, "rule1", "port", "80");
@@ -325,8 +323,8 @@ START_TEST(test_sparql_rule_engine)
     facts_add_spo(g_f, "rule3", "port", "ANY");
     facts_add_spo(g_f, "rule3", "action", "DROP");
 
-    // 2. Setup incoming Packet properties and their matching capabilities
-    // Packet 1: source="untrusted", proto="TCP", port="22"
+    /* 2. setup incoming packet properties and matching capabilities */
+    /* packet 1: source="untrusted", proto="TCP", port="22" */
     facts_add_spo(g_f, "pkt1", "matches_source", "untrusted");
     facts_add_spo(g_f, "pkt1", "matches_source", "ANY");
     facts_add_spo(g_f, "pkt1", "matches_proto", "TCP");
@@ -334,7 +332,7 @@ START_TEST(test_sparql_rule_engine)
     facts_add_spo(g_f, "pkt1", "matches_port", "22");
     facts_add_spo(g_f, "pkt1", "matches_port", "ANY");
 
-    // Packet 2: source="malicious", proto="UDP", port="53"
+    /* packet 2: source="malicious", proto="UDP", port="53" */
     facts_add_spo(g_f, "pkt2", "matches_source", "malicious");
     facts_add_spo(g_f, "pkt2", "matches_source", "ANY");
     facts_add_spo(g_f, "pkt2", "matches_proto", "UDP");
@@ -342,7 +340,7 @@ START_TEST(test_sparql_rule_engine)
     facts_add_spo(g_f, "pkt2", "matches_port", "53");
     facts_add_spo(g_f, "pkt2", "matches_port", "ANY");
 
-    // 3. Query matching rules for Packet 1
+    /* 3. query matching rules for packet 1 */
     int rc = facts_sparql(g_f, bindings, &c,
                           "SELECT ?rule ?action WHERE { "
                           "  ?rule <action> ?action . "
@@ -360,7 +358,7 @@ START_TEST(test_sparql_rule_engine)
     ck_assert(!facts_with_cursor_next(&c));
     facts_with_cursor_destroy(&c);
 
-    /* 4. Query matching rules for Packet 2 */
+    /* 4. query matching rules for packet 2 */
     rc = facts_sparql(g_f, bindings, &c,
                       "SELECT ?rule ?action WHERE { "
                       "  ?rule <action> ?action . "
@@ -494,6 +492,20 @@ START_TEST(test_sparql_statement_classification)
 }
 END_TEST
 
+START_TEST(test_sparql_invalid_limit_offset)
+{
+    s_facts_with_cursor c;
+    const char *s;
+    s_binding bindings[] = {{"?s", &s}, {NULL, NULL}};
+
+    ck_assert_int_eq(-1, facts_sparql(g_f, bindings, &c, "SELECT ?s WHERE { ?s <b> <c> . } LIMIT -5"));
+    ck_assert_int_eq(-1, facts_sparql(g_f, bindings, &c, "SELECT ?s WHERE { ?s <b> <c> . } LIMIT foo"));
+    ck_assert_int_eq(-1, facts_sparql(g_f, bindings, &c, "SELECT ?s WHERE { ?s <b> <c> . } LIMIT \"5\""));
+    ck_assert_int_eq(-1, facts_sparql(g_f, bindings, &c, "SELECT ?s WHERE { ?s <b> <c> . } OFFSET -1"));
+    ck_assert_int_eq(-1, facts_sparql(g_f, bindings, &c, "SELECT ?s WHERE { ?s <b> <c> . } OFFSET bar"));
+}
+END_TEST
+
 Suite *sparql_suite(void)
 {
     Suite *s;
@@ -509,6 +521,7 @@ Suite *sparql_suite(void)
     tcase_add_test(tc_core, test_clue_murder_mystery);
     tcase_add_test(tc_core, test_sparql_prefix);
     tcase_add_test(tc_core, test_sparql_limit_offset);
+    tcase_add_test(tc_core, test_sparql_invalid_limit_offset);
     tcase_add_test(tc_core, test_sparql_ask);
     tcase_add_test(tc_core, test_sparql_orderby);
     tcase_add_test(tc_core, test_sparql_rule_engine);

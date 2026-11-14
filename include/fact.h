@@ -11,11 +11,12 @@
 #define P_LAST ((Symbol) - 1)
 #endif
 
+#define FACT_KEY_SIZE (sizeof(Symbol) * 3)
+
 typedef struct fact {
     Symbol s;
     Symbol p;
     Symbol o;
-    Symbol negated;
     /* support classes are idempotent: a fact may be asserted, derived, or both. */
     unsigned char asserted_count;
     unsigned char derived_count;
@@ -50,7 +51,5 @@ s_fact_list *new_fact_list(s_fact *fact, s_fact_list *next);
 void delete_fact_list(s_fact_list *fl);
 
 s_fact_list *fact_list_find(s_fact_list *fl, s_fact *f);
-
-s_fact_list *fact_list_intern(s_fact_list *fl, s_fact *f);
 
 #endif

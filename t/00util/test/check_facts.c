@@ -1962,7 +1962,7 @@ START_TEST(test_facts_with_negation)
     s_facts_with_cursor cur;
     int rc;
 
-    // Query 1: ?s has property (b, c) but NOT property (e, d) -> should be only 'g'
+    /* query 1: ?s has property (b, c) but NOT property (e, d) -> only 'g' */
     rc = facts_sparql(g_f, bindings, &cur, "SELECT ?s WHERE { ?s <b> <c> . NOT ?s <e> <d> . }");
     ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
@@ -1970,13 +1970,32 @@ START_TEST(test_facts_with_negation)
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
 
-    // Query 2: ?s has property (b, c) but NOT property (e, x) -> should return both 'a' and 'g'
+    /* query 2: ?s has property (b, c) but NOT property (e, x) -> both 'a' and 'g' */
     rc = facts_sparql(g_f, bindings, &cur, "SELECT ?s WHERE { ?s <b> <c> . NOT ?s <e> <x> . }");
     ck_assert_int_eq(0, rc);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert_str_eq("a", s);
     ck_assert(facts_with_cursor_next(&cur));
     ck_assert_str_eq("g", s);
+    ck_assert(!facts_with_cursor_next(&cur));
+    facts_with_cursor_destroy(&cur);
+
+    /* query 3: positive subgoal after NOT backtracks past NOT without hanging */
+    const char *o = NULL;
+    s_binding b2[] = {{"?s", &s}, {"?o", &o}, {NULL, NULL}};
+    ck_assert_int_eq(0, facts_with_checked(g_f, b2, &cur,
+                                           (p_spec)(const char *[]){"?s", "b", "c", NULL, "?s", "e", "x", ":not", NULL, "?s", "b",
+                                                                    "?o", NULL, NULL}));
+    int count = 0;
+    while (facts_with_cursor_next(&cur))
+        count++;
+    ck_assert_int_eq(3, count);
+    facts_with_cursor_destroy(&cur);
+
+    /* query 4: consecutive NOT filters followed by positive miss terminates cleanly */
+    ck_assert_int_eq(0, facts_with_checked(g_f, bindings, &cur,
+                                           (p_spec)(const char *[]){"?s", "b", "c", NULL, "?s", "e", "x", ":not", NULL, "?s", "z",
+                                                                    "y", ":not", NULL, "?s", "missing", "v", NULL, NULL}));
     ck_assert(!facts_with_cursor_next(&cur));
     facts_with_cursor_destroy(&cur);
 }
@@ -1995,12 +2014,12 @@ void teardown_prop(void)
 
 START_TEST(test_facts_helpers)
 {
-    // Test long conversion
+    /* test long conversion */
     const char *l_str = facts_long(g_f, 123456789L);
     ck_assert(l_str);
     ck_assert_int_eq(123456789L, facts_get_long(g_f, l_str));
 
-    // Test double conversion
+    /* test double conversion */
     const char *d_str = facts_double(g_f, 3.14159265);
     ck_assert(d_str);
     double got_d = facts_get_double(g_f, d_str);
@@ -2010,26 +2029,26 @@ END_TEST
 
 START_TEST(test_facts_properties)
 {
-    // Test setting and getting string property
+    /* test setting and getting string property */
     ck_assert(facts_set_prop(g_f, "s1", "name", "John"));
     ck_assert_str_eq("John", facts_get_prop(g_f, "s1", "name"));
 
-    // Test updating string property
+    /* test updating string property */
     ck_assert(facts_set_prop(g_f, "s1", "name", "Joe"));
     ck_assert_str_eq("Joe", facts_get_prop(g_f, "s1", "name"));
 
-    // Test long property
+    /* test long property */
     const char *age_str = facts_long(g_f, 30);
     ck_assert(facts_set_prop(g_f, "s1", "age", age_str));
     ck_assert_int_eq(30, facts_get_prop_long(g_f, "s1", "age"));
 
-    // Test double property
+    /* test double property */
     const char *pi_str = facts_double(g_f, 3.14159);
     ck_assert(facts_set_prop(g_f, "s1", "pi", pi_str));
     double got_pi = facts_get_prop_double(g_f, "s1", "pi");
     ck_assert(got_pi > 3.14 && got_pi < 3.15);
 
-    // Test getting non-existent property
+    /* test getting non-existent property */
     ck_assert(!facts_get_prop(g_f, "s1", "non_existent"));
     ck_assert_int_eq(0, facts_get_prop_long(g_f, "s1", "non_existent"));
     ck_assert(facts_get_prop_double(g_f, "s1", "non_existent") == 0.0);
@@ -2038,44 +2057,44 @@ END_TEST
 
 START_TEST(test_facts_transaction)
 {
-    // 1. Test basic commit:
+    /* 1. test basic commit */
     facts_transaction_begin(g_f);
     ck_assert(facts_add_spo(g_f, "tx", "status", "active"));
     ck_assert_str_eq("active", facts_get_prop(g_f, "tx", "status"));
     facts_transaction_commit(g_f);
-    // Verifying it is still there after commit:
+    /* verify it is still there after commit */
     ck_assert_str_eq("active", facts_get_prop(g_f, "tx", "status"));
 
-    // 2. Test basic rollback:
+    /* 2. test basic rollback */
     facts_transaction_begin(g_f);
     ck_assert(facts_set_prop(g_f, "tx", "status", "mutated"));
     ck_assert_str_eq("mutated", facts_get_prop(g_f, "tx", "status"));
     facts_transaction_rollback(g_f);
-    // Verifying it rolled back to "active":
+    /* verify it rolled back to "active" */
     ck_assert_str_eq("active", facts_get_prop(g_f, "tx", "status"));
 
-    // 3. Test rollback of deletion:
+    /* 3. test rollback of deletion */
     facts_transaction_begin(g_f);
     ck_assert(facts_remove_spo(g_f, "tx", "status", "active"));
     ck_assert(!facts_get_prop(g_f, "tx", "status"));
     facts_transaction_rollback(g_f);
-    // Verifying the deletion was rolled back (added back):
+    /* verify the deletion was rolled back (added back) */
     ck_assert_str_eq("active", facts_get_prop(g_f, "tx", "status"));
 
-    // 4. Test nested transactions:
+    /* 4. test nested transactions */
     facts_transaction_begin(g_f);
     ck_assert(facts_add_spo(g_f, "tx", "step", "1"));
 
     facts_transaction_begin(g_f);
     ck_assert(facts_add_spo(g_f, "tx", "step", "2"));
 
-    // Commit the inner one:
+    /* commit inner transaction */
     facts_transaction_commit(g_f);
 
-    // Rollback the outer one:
+    /* rollback outer transaction */
     facts_transaction_rollback(g_f);
 
-    // Both step 1 and step 2 should be rolled back!
+    /* both step 1 and step 2 should be rolled back */
     ck_assert(!facts_get_prop(g_f, "tx", "step"));
 }
 END_TEST
@@ -2179,7 +2198,7 @@ END_TEST
 
 START_TEST(test_facts_tx_listener_and_entity_builder)
 {
-    // Test Transaction Listener:
+    /* test transaction listener */
     g_listener_called = 0;
     g_listener_entry_count = 0;
     facts_register_tx_listener(g_f, my_tx_listener, &g_listener_called);
@@ -2191,7 +2210,7 @@ START_TEST(test_facts_tx_listener_and_entity_builder)
     ck_assert_int_eq(g_listener_called, 1);
     ck_assert_int_eq(g_listener_entry_count, 1);
 
-    // Test Entity Builder:
+    /* test entity builder */
     s_entity *ent = facts_entity_begin(g_f, "movie:1");
     ck_assert(ent);
     ck_assert_int_eq(facts_entity_add(ent, "title", "Inception"), 0);
@@ -2202,14 +2221,50 @@ START_TEST(test_facts_tx_listener_and_entity_builder)
     g_listener_entry_count = 0;
     ck_assert_int_eq(facts_entity_commit(ent), 0);
 
-    // Verifying properties are set:
+    /* verify properties are set */
     ck_assert_str_eq(facts_get_prop(g_f, "movie:1", "title"), "Inception");
     ck_assert_int_eq(facts_get_prop_long(g_f, "movie:1", "year"), 2010);
     ck_assert_double_eq_tol(facts_get_prop_double(g_f, "movie:1", "rating"), 8.8, 1e-9);
 
-    /* Listener should have been called with 3 entries: */
+    /* listener should have been called with 3 entries */
     ck_assert_int_eq(g_listener_called, 1);
     ck_assert_int_eq(g_listener_entry_count, 3);
+
+    /* test entity abort releases subject symbol reference */
+    s_entity *aborted = facts_entity_begin(g_f, "aborted_entity_subject");
+    ck_assert(aborted != NULL);
+    ck_assert_int_eq(facts_entity_add_long(aborted, "year", 2026), 0);
+    facts_entity_abort(aborted);
+    ck_assert(facts_find_symbol_str(g_f, "aborted_entity_subject") == NULL);
+}
+END_TEST
+
+START_TEST(test_facts_log_failure_preserves_rollback_stack)
+{
+    s_fact_support support;
+    ck_assert(facts_add_spo(g_f, "wal", "test", "fact") != NULL);
+    ck_assert(facts_add_spo_origin(g_f, "wal", "derived", "fact", FACT_ORIGIN_DERIVED) != NULL);
+
+    FILE *ro_log = fopen("/dev/null", "r");
+    ck_assert(ro_log != NULL);
+    g_f->log = ro_log;
+
+    ck_assert_int_eq(0, facts_transaction_begin(g_f));
+    ck_assert_int_eq(-1, facts_remove_spo(g_f, "wal", "test", "fact"));
+    ck_assert(facts_add_spo(g_f, "wal", "derived", "fact") == NULL);
+    ck_assert_int_eq(-1, facts_transaction_rollback(g_f));
+
+    g_f->log = NULL;
+    fclose(ro_log);
+
+    ck_assert_int_eq(1, facts_get_support_spo(g_f, "wal", "test", "fact", &support));
+    ck_assert(support.asserted == 1);
+    ck_assert(support.derived == 0);
+    ck_assert_int_eq(1, facts_get_support_spo(g_f, "wal", "derived", "fact", &support));
+    ck_assert(support.asserted == 0);
+    ck_assert(support.derived == 1);
+    ck_assert_int_eq(0, facts_transaction_begin(g_f));
+    ck_assert_int_eq(0, facts_transaction_commit(g_f));
 }
 END_TEST
 
@@ -2366,6 +2421,7 @@ Suite *facts_suite(void)
     tcase_add_test(tc_prop, test_facts_support_origin_and_rollback);
     tcase_add_test(tc_prop, test_facts_log_tracks_asserted_support_only);
     tcase_add_test(tc_prop, test_facts_tx_listener_and_entity_builder);
+    tcase_add_test(tc_prop, test_facts_log_failure_preserves_rollback_stack);
     tcase_add_test(tc_prop, test_failing_tx_listener_rolls_back_base_and_derived_changes);
     tcase_add_test(tc_prop, test_nested_transaction_rollback_preserves_outer_transaction);
     suite_add_tcase(s, tc_prop);

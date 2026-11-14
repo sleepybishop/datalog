@@ -56,11 +56,49 @@ static void encode_cursor_key(unsigned char *key, const s_fact *f, int index_typ
     }
 }
 
+#define FACTS_LOCAL_BATCH 64
+#define FACTS_LOCAL_FREE_MAX 256
+
+static s_fact *facts_alloc_fact_locked(s_facts *facts, Symbol s, Symbol p, Symbol o)
+{
+    if (!facts->fact_free_list)
+        facts->fact_free_count = arena_alloc_fact_batch(&facts->fact_free_list, FACTS_LOCAL_BATCH);
+    if (!facts->fact_free_list)
+        return NULL;
+    s_fact *f = (s_fact *)facts->fact_free_list;
+    facts->fact_free_list = *(void **)f;
+    facts->fact_free_count--;
+    memset(f, 0, sizeof(*f));
+    f->s = s;
+    f->p = p;
+    f->o = o;
+    return f;
+}
+
+static void facts_flush_fact_freelist(s_facts *facts)
+{
+    if (facts->fact_free_list) {
+        arena_free_fact_list(facts->fact_free_list, facts->fact_free_count);
+        facts->fact_free_list = NULL;
+        facts->fact_free_count = 0;
+    }
+}
+
+static void facts_free_fact_locked(s_facts *facts, s_fact *f)
+{
+    if (!f)
+        return;
+    if (facts->fact_free_count >= FACTS_LOCAL_FREE_MAX)
+        facts_flush_fact_freelist(facts);
+    *(void **)f = facts->fact_free_list;
+    facts->fact_free_list = f;
+    facts->fact_free_count++;
+}
+
 void facts_init(s_facts *facts, s_intern *symbols, unsigned long max)
 {
-    int result = facts_init_checked(facts, symbols, max);
-    assert(result == 0);
-    (void)result;
+    if (facts_init_checked(facts, symbols, max) != 0)
+        abort();
 }
 
 int facts_init_checked(s_facts *facts, s_intern *symbols, unsigned long max)
@@ -128,8 +166,11 @@ void facts_destroy(s_facts *facts)
                 intern_unstring(facts->symbols, fact->p);
                 intern_unstring(facts->symbols, fact->o);
             }
-            arena_free_fact(fact);
+            *(void **)fact = facts->fact_free_list;
+            facts->fact_free_list = fact;
+            facts->fact_free_count++;
         }
+        facts_flush_fact_freelist(facts);
     }
     delete_hexastore(facts->hexastore);
     set_destroy(&facts->index);
@@ -141,9 +182,8 @@ void facts_destroy(s_facts *facts)
 
 void facts_reset(s_facts *facts)
 {
-    int result = facts_reset_checked(facts);
-    assert(result == 0);
-    (void)result;
+    if (facts_reset_checked(facts) != 0)
+        abort();
 }
 
 int facts_reset_checked(s_facts *facts)
@@ -186,6 +226,7 @@ int facts_reset_local_db(s_facts *facts)
     delete_justification_graph(facts->justifications_staging);
     delete_justification_graph(facts->justifications);
     facts->justifications_staging = NULL;
+    facts->justifications_staged_level = 0;
     facts->justifications = replacement_justifications;
     replacement_justifications = NULL;
 
@@ -196,8 +237,11 @@ int facts_reset_local_db(s_facts *facts)
         intern_unstring(facts->symbols, fact->s);
         intern_unstring(facts->symbols, fact->p);
         intern_unstring(facts->symbols, fact->o);
-        arena_free_fact(fact);
+        *(void **)fact = facts->fact_free_list;
+        facts->fact_free_list = fact;
+        facts->fact_free_count++;
     }
+    facts_flush_fact_freelist(facts);
 
     /* 2. replace the hexastore index. */
     delete_hexastore(facts->hexastore);
@@ -317,6 +361,14 @@ Symbol facts_intern(s_facts *facts, const char *string)
     return symbol;
 }
 
+Symbol facts_intern_ref(s_facts *facts, Symbol sym)
+{
+    int has_lock = transaction_acquire_writer(&facts->tx);
+    Symbol symbol = intern_ref(facts->symbols, sym);
+    transaction_release_writer(&facts->tx, has_lock);
+    return symbol;
+}
+
 void facts_unintern(s_facts *facts, Symbol sym)
 {
     int has_lock = transaction_acquire_writer(&facts->tx);
@@ -370,92 +422,105 @@ static void fact_set_origin(s_fact *fact, e_fact_origin origin)
     fact->derived_count = origin == FACT_ORIGIN_DERIVED ? 1 : 0;
 }
 
-static s_fact *facts_insert_fact_copy(s_facts *facts, const s_fact *f, int record_rollback)
+static s_fact *facts_insert_fact_copy(s_facts *facts, const s_fact *f, int record_rollback, int same_intern)
 {
-    s_fact *new = new_fact(f->s, f->p, f->o);
+    s_fact *new = facts_alloc_fact_locked(facts, f->s, f->p, f->o);
     if (!new)
         return NULL;
-    new->negated = f->negated;
     new->asserted_count = f->asserted_count;
     new->derived_count = f->derived_count;
-    Symbol s_ref = facts_intern(facts, symbol_to_str(new->s));
-    Symbol p_ref = facts_intern(facts, symbol_to_str(new->p));
-    Symbol o_ref = facts_intern(facts, symbol_to_str(new->o));
+    Symbol s_ref = same_intern ? intern_ref(facts->symbols, new->s) : intern_string(facts->symbols, symbol_to_str(new->s));
+    Symbol p_ref = same_intern ? intern_ref(facts->symbols, new->p) : intern_string(facts->symbols, symbol_to_str(new->p));
+    Symbol o_ref = same_intern ? intern_ref(facts->symbols, new->o) : intern_string(facts->symbols, symbol_to_str(new->o));
     if (!s_ref || !p_ref || !o_ref) {
         if (s_ref)
-            facts_unintern(facts, s_ref);
+            intern_unstring(facts->symbols, s_ref);
         if (p_ref)
-            facts_unintern(facts, p_ref);
+            intern_unstring(facts->symbols, p_ref);
         if (o_ref)
-            facts_unintern(facts, o_ref);
-        delete_fact(new);
+            intern_unstring(facts->symbols, o_ref);
+        facts_free_fact_locked(facts, new);
         return NULL;
     }
+    new->s = s_ref;
+    new->p = p_ref;
+    new->o = o_ref;
     if (hexastore_insert(facts->hexastore, new) != 0) {
-        facts_unintern(facts, new->s);
-        facts_unintern(facts, new->p);
-        facts_unintern(facts, new->o);
-        delete_fact(new);
+        intern_unstring(facts->symbols, new->s);
+        intern_unstring(facts->symbols, new->p);
+        intern_unstring(facts->symbols, new->o);
+        facts_free_fact_locked(facts, new);
         return NULL;
     }
-    s_set_item *index_item = set_add(&facts->index, new, sizeof(Symbol) * 4);
+    s_set_item *index_item = set_add(&facts->index, new, FACT_KEY_SIZE);
     if (!index_item) {
         hexastore_remove(facts->hexastore, new);
-        facts_unintern(facts, new->s);
-        facts_unintern(facts, new->p);
-        facts_unintern(facts, new->o);
-        delete_fact(new);
+        intern_unstring(facts->symbols, new->s);
+        intern_unstring(facts->symbols, new->p);
+        intern_unstring(facts->symbols, new->o);
+        facts_free_fact_locked(facts, new);
         return NULL;
     }
     if (record_rollback && facts_rollback_push(facts, ROLLBACK_REMOVE, new) != 0) {
         set_remove(&facts->index, index_item);
         hexastore_remove(facts->hexastore, new);
-        facts_unintern(facts, new->s);
-        facts_unintern(facts, new->p);
-        facts_unintern(facts, new->o);
-        delete_fact(new);
+        intern_unstring(facts->symbols, new->s);
+        intern_unstring(facts->symbols, new->p);
+        intern_unstring(facts->symbols, new->o);
+        facts_free_fact_locked(facts, new);
         return NULL;
     }
     return new;
 }
 
-s_fact *facts_add_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
+static s_fact *facts_add_fact_origin_locked(s_facts *facts, const s_fact *f, e_fact_origin origin, int same_intern)
 {
     s_fact *found;
-    assert(facts);
-    assert(f);
-    int has_lock = transaction_acquire_writer(&facts->tx);
-    s_set_item *si = set_get(&facts->index, f, sizeof(Symbol) * 4);
+    s_fact lookup_key;
+    if (same_intern) {
+        lookup_key = *f;
+    } else {
+        lookup_key.s = intern_find_symbol_str(facts->symbols, symbol_to_str(f->s));
+        lookup_key.p = intern_find_symbol_str(facts->symbols, symbol_to_str(f->p));
+        lookup_key.o = intern_find_symbol_str(facts->symbols, symbol_to_str(f->o));
+    }
+    s_set_item *si = (lookup_key.s && lookup_key.p && lookup_key.o) ? set_get(&facts->index, &lookup_key, FACT_KEY_SIZE) : NULL;
     if (si) {
         found = (s_fact *)si->data;
         unsigned char *support = origin == FACT_ORIGIN_ASSERTED ? &found->asserted_count : &found->derived_count;
         if (*support == 0) {
             int was_present = found->asserted_count || found->derived_count;
-            if (facts_rollback_push(facts, was_present ? ROLLBACK_STATE : ROLLBACK_REMOVE, found) != 0) {
-                transaction_release_writer(&facts->tx, has_lock);
+            if (facts_rollback_push(facts, was_present ? ROLLBACK_STATE : ROLLBACK_REMOVE, found) != 0)
                 return NULL;
-            }
             if (origin == FACT_ORIGIN_ASSERTED && facts_log_change(facts, "add", found) != 0) {
-                transaction_release_writer(&facts->tx, has_lock);
+                facts_rollback_pop_discard(facts);
                 return NULL;
             }
             facts_set_support_locked(facts, found, origin == FACT_ORIGIN_ASSERTED ? 1 : found->asserted_count,
                                      origin == FACT_ORIGIN_DERIVED ? 1 : found->derived_count);
         }
-        transaction_release_writer(&facts->tx, has_lock);
         return found;
     }
     s_fact copy = *f;
     fact_set_origin(&copy, origin);
-    s_fact *new = facts_insert_fact_copy(facts, &copy, 1);
+    s_fact *new = facts_insert_fact_copy(facts, &copy, 1, same_intern);
     if (new && origin == FACT_ORIGIN_ASSERTED && facts_log_change(facts, "add", new) != 0) {
         facts_set_support_locked(facts, new, 0, 0);
         if (facts->tx.level == 0)
             facts_reclaim_retired(facts);
         new = NULL;
     }
-    transaction_release_writer(&facts->tx, has_lock);
     return new;
+}
+
+s_fact *facts_add_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
+{
+    assert(facts);
+    assert(f);
+    int has_lock = transaction_acquire_writer(&facts->tx);
+    s_fact *res = facts_add_fact_origin_locked(facts, f, origin, 0);
+    transaction_release_writer(&facts->tx, has_lock);
+    return res;
 }
 
 s_fact *facts_add_fact(s_facts *facts, s_fact *f)
@@ -465,31 +530,30 @@ s_fact *facts_add_fact(s_facts *facts, s_fact *f)
 
 s_fact *facts_add_spo_origin(s_facts *facts, const char *s, const char *p, const char *o, e_fact_origin origin)
 {
-    s_fact f;
+    s_fact f = {0};
     assert(facts);
     assert(s);
     assert(p);
     assert(o);
     int has_lock = transaction_acquire_writer(&facts->tx);
-    f.s = facts_intern(facts, s);
-    f.p = facts_intern(facts, p);
-    f.o = facts_intern(facts, o);
+    f.s = intern_string(facts->symbols, s);
+    f.p = intern_string(facts->symbols, p);
+    f.o = intern_string(facts->symbols, o);
     if (!f.s || !f.p || !f.o) {
         if (f.s)
-            facts_unintern(facts, f.s);
+            intern_unstring(facts->symbols, f.s);
         if (f.p)
-            facts_unintern(facts, f.p);
+            intern_unstring(facts->symbols, f.p);
         if (f.o)
-            facts_unintern(facts, f.o);
+            intern_unstring(facts->symbols, f.o);
         transaction_release_writer(&facts->tx, has_lock);
         return NULL;
     }
-    f.negated = NULL;
     fact_set_origin(&f, origin);
-    s_fact *ret = facts_add_fact_origin(facts, &f, origin);
-    facts_unintern(facts, f.s);
-    facts_unintern(facts, f.p);
-    facts_unintern(facts, f.o);
+    s_fact *ret = facts_add_fact_origin_locked(facts, &f, origin, 1);
+    intern_unstring(facts->symbols, f.s);
+    intern_unstring(facts->symbols, f.p);
+    intern_unstring(facts->symbols, f.o);
     transaction_release_writer(&facts->tx, has_lock);
     return ret;
 }
@@ -583,10 +647,10 @@ static int facts_remove_found(s_facts *facts, s_set_item *si, s_fact *found)
     }
     set_remove(&facts->index, si);
     hexastore_remove(facts->hexastore, found);
-    facts_unintern(facts, found->s);
-    facts_unintern(facts, found->p);
-    facts_unintern(facts, found->o);
-    delete_fact(found);
+    intern_unstring(facts->symbols, found->s);
+    intern_unstring(facts->symbols, found->p);
+    intern_unstring(facts->symbols, found->o);
+    facts_free_fact_locked(facts, found);
     return 0;
 }
 
@@ -599,7 +663,7 @@ void facts_reclaim_retired(s_facts *facts)
         fact->retired_next = NULL;
         fact->retirement_queued = 0;
         if (!fact->asserted_count && !fact->derived_count) {
-            s_set_item *item = set_get(&facts->index, fact, sizeof(Symbol) * 4);
+            s_set_item *item = set_get(&facts->index, fact, FACT_KEY_SIZE);
             assert(item != NULL);
             facts_remove_found(facts, item, fact);
         }
@@ -614,7 +678,16 @@ int facts_remove_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
     assert(facts);
     assert(f);
     int has_lock = transaction_acquire_writer(&facts->tx);
-    s_set_item *si = set_get(&facts->index, f, sizeof(Symbol) * 4);
+    s_set_item *si = set_get(&facts->index, f, FACT_KEY_SIZE);
+    if (!si) {
+        s_fact lookup_key = {
+            .s = intern_find_symbol_str(facts->symbols, symbol_to_str(f->s)),
+            .p = intern_find_symbol_str(facts->symbols, symbol_to_str(f->p)),
+            .o = intern_find_symbol_str(facts->symbols, symbol_to_str(f->o)),
+        };
+        if (lookup_key.s && lookup_key.p && lookup_key.o)
+            si = set_get(&facts->index, &lookup_key, FACT_KEY_SIZE);
+    }
     if (si) {
         found = (s_fact *)si->data;
         unsigned char *support = origin == FACT_ORIGIN_ASSERTED ? &found->asserted_count : &found->derived_count;
@@ -628,6 +701,7 @@ int facts_remove_fact_origin(s_facts *facts, s_fact *f, e_fact_origin origin)
             return -1;
         }
         if (origin == FACT_ORIGIN_ASSERTED && facts_log_change(facts, "remove", found) != 0) {
+            facts_rollback_pop_discard(facts);
             transaction_release_writer(&facts->tx, has_lock);
             return -1;
         }
@@ -679,8 +753,8 @@ int facts_get_support_spo(s_facts *facts, const char *s, const char *p, const ch
     Symbol o_sym = intern_find_symbol_str(facts->symbols, o);
     int found = 0;
     if (s_sym && p_sym && o_sym) {
-        s_fact key = {.s = s_sym, .p = p_sym, .o = o_sym, .negated = NULL};
-        s_set_item *si = set_get(&facts->index, &key, sizeof(Symbol) * 4);
+        s_fact key = {.s = s_sym, .p = p_sym, .o = o_sym};
+        s_set_item *si = set_get(&facts->index, &key, FACT_KEY_SIZE);
         if (si) {
             s_fact *fact = (s_fact *)si->data;
             support->asserted = fact->asserted_count;
@@ -699,8 +773,8 @@ static s_fact *facts_lookup_spo_locked(s_facts *facts, const char *s, const char
     Symbol o_sym = intern_find_symbol_str(facts->symbols, o);
     if (!s_sym || !p_sym || !o_sym)
         return NULL;
-    s_fact key = {.s = s_sym, .p = p_sym, .o = o_sym, .negated = NULL};
-    s_set_item *si = set_get(&facts->index, &key, sizeof(Symbol) * 4);
+    s_fact key = {.s = s_sym, .p = p_sym, .o = o_sym};
+    s_set_item *si = set_get(&facts->index, &key, FACT_KEY_SIZE);
     s_fact *fact = si ? (s_fact *)si->data : NULL;
     return fact && (fact->asserted_count || fact->derived_count) ? fact : NULL;
 }
@@ -813,7 +887,16 @@ s_fact *facts_get_fact(s_facts *facts, s_fact *f)
     assert(facts);
     assert(f);
     int acquired = transaction_acquire_reader(&facts->tx);
-    s_set_item *si = set_get(&facts->index, f, sizeof(Symbol) * 4);
+    s_set_item *si = set_get(&facts->index, f, FACT_KEY_SIZE);
+    if (!si) {
+        s_fact lookup_key = {
+            .s = intern_find_symbol_str(facts->symbols, symbol_to_str(f->s)),
+            .p = intern_find_symbol_str(facts->symbols, symbol_to_str(f->p)),
+            .o = intern_find_symbol_str(facts->symbols, symbol_to_str(f->o)),
+        };
+        if (lookup_key.s && lookup_key.p && lookup_key.o)
+            si = set_get(&facts->index, &lookup_key, FACT_KEY_SIZE);
+    }
     s_fact *result = si ? (s_fact *)si->data : NULL;
     if (result && !result->asserted_count && !result->derived_count)
         result = NULL;
@@ -965,7 +1048,6 @@ void facts_with_3(s_facts *facts, s_facts_cursor *c, const char *s, const char *
     f.s = interned_s;
     f.p = interned_p;
     f.o = interned_o;
-    f.negated = NULL;
     facts_cursor_init(facts, c, facts->index_spo, &f, &f);
     transaction_release_reader(&facts->tx, acquired);
 }
@@ -1177,6 +1259,7 @@ void facts_with_cursor_destroy(s_facts_with_cursor *c)
     if (c->sort_var) {
         free(c->sort_var);
     }
+    free(c->saved_values);
     c->facts = NULL;
     c->bindings = NULL;
     c->facts_count = 0;
@@ -1189,6 +1272,7 @@ void facts_with_cursor_destroy(s_facts_with_cursor *c)
     c->sorted_matches = NULL;
     c->sort_var = NULL;
     c->sorted_count = 0;
+    c->saved_values = NULL;
 }
 
 void spec_subst(p_spec spec, s_binding *bindings)
@@ -1388,22 +1472,46 @@ int facts_with_cursor_next(s_facts_with_cursor *c)
     return ok;
 }
 
+static int cursor_level_is_negated(const s_facts_with_cursor *c, size_t level)
+{
+    const char *neg = c->spec[level * 4 + 3];
+    return neg && strcmp(neg, ":not") == 0;
+}
+
+static int cursor_backtrack_to_generator(s_facts_with_cursor *c, size_t cur)
+{
+    while (cur > 0) {
+        cur--;
+        s_facts_with_cursor_level *prev = &c->l[cur];
+        if (cursor_level_is_negated(c, cur)) {
+            if (prev->spec_init) {
+                facts_cursor_stop(&prev->c);
+                prev->spec_init = 0;
+            }
+            continue;
+        }
+        c->level = cur;
+        return 1;
+    }
+    c->facts_count = 0;
+    return 0;
+}
+
 int facts_with_cursor_next_inner(s_facts_with_cursor *c)
 {
     assert(c);
     if (!c->facts_count)
         return 0;
     if (c->level == c->facts_count) {
-        s_facts_with_cursor_level *l = c->l + (c->facts_count - 1);
-        if (l->spec[3] && strcmp(l->spec[3], ":not") == 0) {
-            facts_cursor_stop(&l->c);
-            l->spec_init = 0;
-            c->level--;
-            if (!c->level) {
-                c->facts_count = 0;
-                return 0;
+        size_t last = c->facts_count - 1;
+        s_facts_with_cursor_level *l = c->l + last;
+        if (cursor_level_is_negated(c, last)) {
+            if (l->spec_init) {
+                facts_cursor_stop(&l->c);
+                l->spec_init = 0;
             }
-            c->level--;
+            if (!cursor_backtrack_to_generator(c, last))
+                return 0;
         } else {
             l->fact = facts_cursor_next(&l->c);
             if (facts_cursor_error(&l->c)) {
@@ -1414,12 +1522,8 @@ int facts_with_cursor_next_inner(s_facts_with_cursor *c)
                 return 1;
             facts_cursor_stop(&l->c);
             l->spec_init = 0;
-            c->level--;
-            if (!c->level) {
-                c->facts_count = 0;
+            if (!cursor_backtrack_to_generator(c, last))
                 return 0;
-            }
-            c->level--;
         }
     }
     while (c->level < c->facts_count) {
@@ -1451,57 +1555,52 @@ int facts_with_cursor_next_inner(s_facts_with_cursor *c)
             }
         }
 
-        if (l->spec[3] && strcmp(l->spec[3], ":not") == 0) {
-            /* negated level: save bindings to isolate from potential variable matching */
-            int bindings_count = 0;
+        if (cursor_level_is_negated(c, c->level)) {
+            /* negated level: save bindings to isolate from variable matching */
+            size_t bindings_count = 0;
             while (c->bindings && c->bindings[bindings_count].name)
                 bindings_count++;
-            const char **saved_values = NULL;
             if (bindings_count > 0) {
-                saved_values = malloc(bindings_count * sizeof(const char *));
-                if (!saved_values) {
-                    facts_cursor_stop(&l->c);
-                    l->spec_init = 0;
-                    c->error = -1;
-                    c->facts_count = 0;
-                    return 0;
+                if (!c->saved_values) {
+                    c->saved_values = malloc(bindings_count * sizeof(const char *));
+                    if (!c->saved_values) {
+                        facts_cursor_stop(&l->c);
+                        l->spec_init = 0;
+                        c->error = -1;
+                        c->facts_count = 0;
+                        return 0;
+                    }
                 }
-                for (int i = 0; i < bindings_count; i++) {
-                    saved_values[i] = *c->bindings[i].value;
+                for (size_t i = 0; i < bindings_count; i++) {
+                    c->saved_values[i] = *c->bindings[i].value;
                 }
             }
 
             s_fact *found_fact = facts_cursor_next(&l->c);
+            int cur_err = facts_cursor_error(&l->c);
+            facts_cursor_stop(&l->c);
+            l->spec_init = 0;
 
             /* restore bindings */
-            if (bindings_count > 0) {
-                for (int i = 0; i < bindings_count; i++) {
-                    *c->bindings[i].value = saved_values[i];
-                }
-                free(saved_values);
+            for (size_t i = 0; i < bindings_count; i++) {
+                *c->bindings[i].value = c->saved_values[i];
             }
 
-            if (facts_cursor_error(&l->c)) {
+            if (cur_err) {
                 c->error = -1;
                 return 0;
             }
 
             if (found_fact) {
-                /* fact exists in db, negation fails. backtrack. */
-                facts_cursor_stop(&l->c);
-                l->spec_init = 0;
-                if (c->level > 0) {
-                    c->level--;
-                } else {
-                    c->facts_count = 0;
+                /* fact exists in db, negation fails: backtrack to generator */
+                if (!cursor_backtrack_to_generator(c, c->level))
                     return 0;
-                }
             } else {
-                /* fact does not exist, negation succeeds. advance. */
+                /* fact does not exist, negation succeeds: advance */
                 c->level++;
             }
         } else {
-            /* positive level: */
+            /* positive level */
             l->fact = facts_cursor_next(&l->c);
             if (facts_cursor_error(&l->c)) {
                 c->error = -1;
@@ -1512,12 +1611,8 @@ int facts_with_cursor_next_inner(s_facts_with_cursor *c)
             } else {
                 facts_cursor_stop(&l->c);
                 l->spec_init = 0;
-                if (c->level > 0) {
-                    c->level--;
-                } else {
-                    c->facts_count = 0;
+                if (!cursor_backtrack_to_generator(c, c->level))
                     return 0;
-                }
             }
         }
     }
@@ -1694,7 +1789,10 @@ int facts_justifications_stage(s_facts *facts, int preserve_existing)
         return -1;
     facts->justifications_staging =
         preserve_existing ? justification_graph_clone(facts->justifications) : new_justification_graph();
-    return facts->justifications_staging ? 0 : -1;
+    if (!facts->justifications_staging)
+        return -1;
+    facts->justifications_staged_level = facts->tx.level;
+    return 0;
 }
 
 void facts_justifications_commit(s_facts *facts)
@@ -1704,6 +1802,7 @@ void facts_justifications_commit(s_facts *facts)
     delete_justification_graph(facts->justifications);
     facts->justifications = facts->justifications_staging;
     facts->justifications_staging = NULL;
+    facts->justifications_staged_level = 0;
 }
 
 void facts_justifications_discard(s_facts *facts)
@@ -1712,6 +1811,7 @@ void facts_justifications_discard(s_facts *facts)
         return;
     delete_justification_graph(facts->justifications_staging);
     facts->justifications_staging = NULL;
+    facts->justifications_staged_level = 0;
 }
 
 size_t facts_justification_count(s_facts *facts, const char *s, const char *p, const char *o)
@@ -1836,7 +1936,7 @@ void facts_apply_rollback_entry(s_facts *facts, const s_rollback_entry *entry)
     assert(facts);
     assert(entry);
     int has_lock = transaction_acquire_writer(&facts->tx);
-    s_set_item *si = set_get(&facts->index, &entry->fact, sizeof(Symbol) * 4);
+    s_set_item *si = set_get(&facts->index, &entry->fact, FACT_KEY_SIZE);
     if (entry->action == ROLLBACK_REMOVE) {
         if (si) {
             if (((s_fact *)si->data)->asserted_count && facts->log)
@@ -1860,42 +1960,50 @@ void facts_apply_rollback_entry(s_facts *facts, const s_rollback_entry *entry)
 
 s_entity *facts_entity_begin(s_facts *facts, const char *subject)
 {
-    assert(facts);
-    assert(subject);
+    if (!facts || !subject)
+        return NULL;
     s_entity *ent = malloc(sizeof(s_entity));
-    if (ent) {
-        ent->facts = facts;
-        ent->subject = symbol_to_str(facts_intern(facts, subject));
-        facts_transaction_begin(facts);
-        ent->in_transaction = 1;
+    if (!ent)
+        return NULL;
+    if (facts_transaction_begin(facts) != 0) {
+        free(ent);
+        return NULL;
     }
+    ent->facts = facts;
+    ent->subject_sym = facts_intern(facts, subject);
+    if (!ent->subject_sym) {
+        facts_transaction_rollback(facts);
+        free(ent);
+        return NULL;
+    }
+    ent->subject = symbol_to_str(ent->subject_sym);
+    ent->in_transaction = 1;
     return ent;
 }
 
 int facts_entity_add(s_entity *ent, const char *predicate, const char *object)
 {
-    if (!ent || !ent->in_transaction)
+    if (!ent || !ent->in_transaction || !predicate || !object)
         return -1;
-    facts_add_spo(ent->facts, ent->subject, predicate, object);
-    return 0;
+    return facts_add_spo(ent->facts, ent->subject, predicate, object) ? 0 : -1;
 }
 
 int facts_entity_add_long(s_entity *ent, const char *predicate, long value)
 {
-    if (!ent || !ent->in_transaction)
+    if (!ent || !ent->in_transaction || !predicate)
         return -1;
-    const char *val_str = facts_long(ent->facts, value);
-    facts_add_spo(ent->facts, ent->subject, predicate, val_str);
-    return 0;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%ld", value);
+    return facts_add_spo(ent->facts, ent->subject, predicate, buf) ? 0 : -1;
 }
 
 int facts_entity_add_double(s_entity *ent, const char *predicate, double value)
 {
-    if (!ent || !ent->in_transaction)
+    if (!ent || !ent->in_transaction || !predicate)
         return -1;
-    const char *val_str = facts_double(ent->facts, value);
-    facts_add_spo(ent->facts, ent->subject, predicate, val_str);
-    return 0;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.17g", value);
+    return facts_add_spo(ent->facts, ent->subject, predicate, buf) ? 0 : -1;
 }
 
 int facts_entity_commit(s_entity *ent)
@@ -1903,6 +2011,10 @@ int facts_entity_commit(s_entity *ent)
     if (!ent)
         return -1;
     int res = 0;
+    if (ent->subject_sym) {
+        facts_unintern(ent->facts, ent->subject_sym);
+        ent->subject_sym = NULL;
+    }
     if (ent->in_transaction) {
         res = facts_transaction_commit(ent->facts);
         ent->in_transaction = 0;
@@ -1915,6 +2027,10 @@ void facts_entity_abort(s_entity *ent)
 {
     if (!ent)
         return;
+    if (ent->subject_sym) {
+        facts_unintern(ent->facts, ent->subject_sym);
+        ent->subject_sym = NULL;
+    }
     if (ent->in_transaction) {
         facts_transaction_rollback(ent->facts);
         ent->in_transaction = 0;
@@ -1935,15 +2051,18 @@ static void facts_spec_sort_masked(s_facts *facts, p_spec spec, size_t count, un
         double best_cost = -1.0;
 
         for (size_t j = i; j < count; j++) {
-            s_spec_fact *f = (s_spec_fact *)(spec + j * 4);
+            const char *fs = spec[j * 4 + 0];
+            const char *fp = spec[j * 4 + 1];
+            const char *fo = spec[j * 4 + 2];
+            const char *fneg = spec[j * 4 + 3];
             double cost = 1.0;
             int has_unbound = 0;
 
             /* subject */
-            if (variable_masks ? (variable_masks[j] & 1) : f->s[0] == '?') {
+            if (variable_masks ? (variable_masks[j] & 1) : fs[0] == '?') {
                 int bound = 0;
                 for (size_t k = 0; k < bound_vars_count; k++) {
-                    if (strcmp(bound_vars[k], f->s) == 0) {
+                    if (strcmp(bound_vars[k], fs) == 0) {
                         bound = 1;
                         break;
                     }
@@ -1952,15 +2071,15 @@ static void facts_spec_sort_masked(s_facts *facts, p_spec spec, size_t count, un
                     has_unbound = 1;
                 cost *= bound ? 1.0 : 100000.0;
             } else {
-                s_set_item *sym = intern_find_symbol(facts->symbols, f->s);
+                s_set_item *sym = intern_find_symbol(facts->symbols, fs);
                 cost *= sym ? (double)sym->usage : 0.1;
             }
 
             /* predicate */
-            if (variable_masks ? (variable_masks[j] & 2) : f->p[0] == '?') {
+            if (variable_masks ? (variable_masks[j] & 2) : fp[0] == '?') {
                 int bound = 0;
                 for (size_t k = 0; k < bound_vars_count; k++) {
-                    if (strcmp(bound_vars[k], f->p) == 0) {
+                    if (strcmp(bound_vars[k], fp) == 0) {
                         bound = 1;
                         break;
                     }
@@ -1969,15 +2088,15 @@ static void facts_spec_sort_masked(s_facts *facts, p_spec spec, size_t count, un
                     has_unbound = 1;
                 cost *= bound ? 1.0 : 100000.0;
             } else {
-                s_set_item *sym = intern_find_symbol(facts->symbols, f->p);
+                s_set_item *sym = intern_find_symbol(facts->symbols, fp);
                 cost *= sym ? (double)sym->usage : 0.1;
             }
 
             /* object */
-            if (variable_masks ? (variable_masks[j] & 4) : f->o[0] == '?') {
+            if (variable_masks ? (variable_masks[j] & 4) : fo[0] == '?') {
                 int bound = 0;
                 for (size_t k = 0; k < bound_vars_count; k++) {
-                    if (strcmp(bound_vars[k], f->o) == 0) {
+                    if (strcmp(bound_vars[k], fo) == 0) {
                         bound = 1;
                         break;
                     }
@@ -1986,11 +2105,11 @@ static void facts_spec_sort_masked(s_facts *facts, p_spec spec, size_t count, un
                     has_unbound = 1;
                 cost *= bound ? 1.0 : 100000.0;
             } else {
-                s_set_item *sym = intern_find_symbol(facts->symbols, f->o);
+                s_set_item *sym = intern_find_symbol(facts->symbols, fo);
                 cost *= sym ? (double)sym->usage : 0.1;
             }
 
-            if (f->negated && strcmp(f->negated, ":not") == 0) {
+            if (fneg && strcmp(fneg, ":not") == 0) {
                 if (has_unbound) {
                     cost = 1e15;
                 } else {
@@ -2005,11 +2124,10 @@ static void facts_spec_sort_masked(s_facts *facts, p_spec spec, size_t count, un
         }
 
         if (best_idx != i) {
-            s_spec_fact *a = (s_spec_fact *)(spec + i * 4);
-            s_spec_fact *b = (s_spec_fact *)(spec + best_idx * 4);
-            s_spec_fact swap = *a;
-            *a = *b;
-            *b = swap;
+            const char *swap[4];
+            memcpy(swap, spec + i * 4, sizeof(swap));
+            memcpy(spec + i * 4, spec + best_idx * 4, sizeof(swap));
+            memcpy(spec + best_idx * 4, swap, sizeof(swap));
             if (variable_masks) {
                 unsigned char mask = variable_masks[i];
                 variable_masks[i] = variable_masks[best_idx];
@@ -2017,40 +2135,43 @@ static void facts_spec_sort_masked(s_facts *facts, p_spec spec, size_t count, un
             }
         }
 
-        s_spec_fact *chosen = (s_spec_fact *)(spec + i * 4);
-        if (!(chosen->negated && strcmp(chosen->negated, ":not") == 0)) {
-            if ((variable_masks ? (variable_masks[i] & 1) : chosen->s[0] == '?') && bound_vars_count < 128) {
+        const char *cs = spec[i * 4 + 0];
+        const char *cp = spec[i * 4 + 1];
+        const char *co = spec[i * 4 + 2];
+        const char *cneg = spec[i * 4 + 3];
+        if (!(cneg && strcmp(cneg, ":not") == 0)) {
+            if ((variable_masks ? (variable_masks[i] & 1) : cs[0] == '?') && bound_vars_count < 128) {
                 int exists = 0;
                 for (size_t k = 0; k < bound_vars_count; k++) {
-                    if (strcmp(bound_vars[k], chosen->s) == 0) {
+                    if (strcmp(bound_vars[k], cs) == 0) {
                         exists = 1;
                         break;
                     }
                 }
                 if (!exists)
-                    bound_vars[bound_vars_count++] = chosen->s;
+                    bound_vars[bound_vars_count++] = cs;
             }
-            if ((variable_masks ? (variable_masks[i] & 2) : chosen->p[0] == '?') && bound_vars_count < 128) {
+            if ((variable_masks ? (variable_masks[i] & 2) : cp[0] == '?') && bound_vars_count < 128) {
                 int exists = 0;
                 for (size_t k = 0; k < bound_vars_count; k++) {
-                    if (strcmp(bound_vars[k], chosen->p) == 0) {
+                    if (strcmp(bound_vars[k], cp) == 0) {
                         exists = 1;
                         break;
                     }
                 }
                 if (!exists)
-                    bound_vars[bound_vars_count++] = chosen->p;
+                    bound_vars[bound_vars_count++] = cp;
             }
-            if ((variable_masks ? (variable_masks[i] & 4) : chosen->o[0] == '?') && bound_vars_count < 128) {
+            if ((variable_masks ? (variable_masks[i] & 4) : co[0] == '?') && bound_vars_count < 128) {
                 int exists = 0;
                 for (size_t k = 0; k < bound_vars_count; k++) {
-                    if (strcmp(bound_vars[k], chosen->o) == 0) {
+                    if (strcmp(bound_vars[k], co) == 0) {
                         exists = 1;
                         break;
                     }
                 }
                 if (!exists)
-                    bound_vars[bound_vars_count++] = chosen->o;
+                    bound_vars[bound_vars_count++] = co;
             }
         }
     }

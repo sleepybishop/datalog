@@ -1,10 +1,9 @@
 #include <assert.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <limits.h>
-#include <stdint.h>
 #include "intern.h"
 #include "rax.h"
 
@@ -13,9 +12,8 @@
 static s_intern_page *new_page(size_t min_capacity)
 {
     size_t page_capacity = 65536 - sizeof(s_intern_page);
-    if (min_capacity > page_capacity) {
+    if (min_capacity > page_capacity)
         page_capacity = min_capacity;
-    }
     if (page_capacity > SIZE_MAX - sizeof(s_intern_page))
         return NULL;
     s_intern_page *page = malloc(sizeof(s_intern_page) + page_capacity);
@@ -27,7 +25,7 @@ static s_intern_page *new_page(size_t min_capacity)
     return page;
 }
 
-static void *intern_alloc(s_intern *intern, size_t size)
+static void *intern_alloc(s_intern *intern, size_t size, s_intern_page **out_page, size_t *out_prev_size)
 {
     if (size > SIZE_MAX - 7)
         return NULL;
@@ -40,6 +38,8 @@ static void *intern_alloc(s_intern *intern, size_t size)
         page->next = intern->pages;
         intern->pages = page;
     }
+    *out_page = page;
+    *out_prev_size = page->size;
     void *ptr = page->data + page->size;
     page->size += size;
     return ptr;
@@ -47,9 +47,8 @@ static void *intern_alloc(s_intern *intern, size_t size)
 
 void intern_init(s_intern *intern, unsigned long max)
 {
-    int result = intern_init_checked(intern, max);
-    assert(result == 0);
-    (void)result;
+    if (intern_init_checked(intern, max) != 0)
+        abort();
 }
 
 int intern_init_checked(s_intern *intern, unsigned long max)
@@ -71,15 +70,8 @@ void intern_destroy(s_intern *intern)
 {
     assert(intern);
     if (intern->symbols_delete && intern->symbols) {
-        raxIterator it;
-        raxStart(&it, intern->symbols);
-        raxSeek(&it, "^", NULL, 0);
-        while (raxNext(&it)) {
-            s_set_item *item = it.data;
-            free(item);
-        }
-        raxStop(&it);
         raxFree(intern->symbols);
+        intern->symbols = NULL;
     }
     s_intern_page *page = intern->pages;
     while (page) {
@@ -113,18 +105,16 @@ s_set_item *intern_find_symbol(s_intern *intern, const char *string)
     assert(intern);
     assert(string);
     void *item = NULL;
-    int found = raxFind(intern->symbols, (unsigned char *)string, strlen(string), &item);
-    if (!found)
+    if (!raxFind(intern->symbols, (unsigned char *)string, strlen(string), &item))
         return NULL;
-    return (s_set_item *)item;
+    s_set_item *si = (s_set_item *)item;
+    return si->usage > 0 ? si : NULL;
 }
 
 Symbol intern_find_symbol_str(s_intern *intern, const char *string)
 {
     s_set_item *i = intern_find_symbol(intern, string);
-    if (i)
-        return (Symbol)i->data;
-    return NULL;
+    return i ? (Symbol)i->data : NULL;
 }
 
 Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
@@ -132,31 +122,29 @@ Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
     assert(intern);
     assert(string);
     void *res = NULL;
-    int found = raxFind(intern->symbols, (unsigned char *)string, len, &res);
-    s_set_item *i;
-    if (!found) {
+    s_set_item *i = NULL;
+    if (!raxFind(intern->symbols, (unsigned char *)string, len, &res)) {
         if (len > SIZE_MAX - sizeof(s_symbol) - 1 || intern->next_id == UINT64_MAX)
             return NULL;
-        s_symbol *sym = intern_alloc(intern, sizeof(s_symbol) + len + 1);
+        s_intern_page *page = NULL;
+        size_t prev_size = 0;
+        s_symbol *sym = intern_alloc(intern, sizeof(s_symbol) + len + 1, &page, &prev_size);
         if (!sym)
             return NULL;
         sym->id = intern->next_id++;
+        sym->item.data = sym;
+        sym->item.len = len;
+        sym->item.hash = 0;
+        sym->item.usage = 0;
         memcpy(sym->data, string, len);
         sym->data[len] = '\0';
 
-        i = malloc(sizeof(s_set_item));
-        if (!i)
-            return NULL;
-        i->data = (void *)sym;
-        i->len = len;
-        i->hash = 0;
-        i->usage = 0;
-
-        int ret = raxInsert(intern->symbols, (unsigned char *)string, len, i, NULL);
-        if (ret != 1) {
-            free(i);
+        if (raxInsert(intern->symbols, (unsigned char *)sym->data, len, &sym->item, NULL) != 1) {
+            page->size = prev_size;
+            intern->next_id--;
             return NULL;
         }
+        i = &sym->item;
     } else {
         i = (s_set_item *)res;
     }
@@ -173,23 +161,36 @@ Symbol intern_string(s_intern *intern, const char *string)
     return intern_string_view(intern, string, strlen(string));
 }
 
+Symbol intern_ref(s_intern *intern, Symbol sym)
+{
+    if (!intern || !sym || sym == P_LAST)
+        return NULL;
+    s_symbol *mut = (s_symbol *)sym;
+    if (mut->item.usage == 0)
+        return intern_string_view(intern, mut->data, mut->item.len);
+    if (mut->item.usage == ULONG_MAX)
+        return NULL;
+    mut->item.usage++;
+    return sym;
+}
+
 void intern_unstring(s_intern *intern, Symbol sym)
 {
     assert(intern);
     assert(sym);
-    s_set_item *i = intern_find_symbol(intern, sym->data);
-    if (i) {
-        i->usage--;
-        if (!i->usage) {
-            void *old;
-            int ret = raxRemove(intern->symbols, (unsigned char *)sym->data, strlen(sym->data), &old);
-            /* an allocation failure walking a deep trie must not leave a freed
-             * value reachable from the table; a zero-use item can be reused. */
-            if (ret != 1)
-                return;
-            assert(old == i);
-            free(i);
-        }
+    if (sym == P_FIRST || sym == P_LAST)
+        return;
+    s_symbol *mut = (s_symbol *)sym;
+    if (mut->item.usage == 0)
+        return;
+    mut->item.usage--;
+    if (!mut->item.usage) {
+        void *old = NULL;
+        int ret = raxRemove(intern->symbols, (unsigned char *)mut->data, mut->item.len, &old);
+        /* keep zero-use item in rax on OOM so its key can be reused safely */
+        if (ret != 1)
+            return;
+        assert(old == &mut->item);
     }
 }
 
@@ -211,22 +212,14 @@ Symbol intern_double(s_intern *intern, double d)
 
 long intern_get_long(s_intern *intern, const char *string)
 {
-    s_set_item *i;
     assert(intern);
     assert(string);
-    i = intern_find_symbol(intern, string);
-    if (i)
-        return strtol(string, NULL, 10);
-    return 0;
+    return intern_find_symbol(intern, string) ? strtol(string, NULL, 10) : 0;
 }
 
 double intern_get_double(s_intern *intern, const char *string)
 {
-    s_set_item *i;
     assert(intern);
     assert(string);
-    i = intern_find_symbol(intern, string);
-    if (i)
-        return strtod(string, NULL);
-    return 0.0;
+    return intern_find_symbol(intern, string) ? strtod(string, NULL) : 0.0;
 }

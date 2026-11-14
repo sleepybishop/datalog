@@ -112,7 +112,7 @@ START_TEST(test_eval_stratified_negation)
     ck_assert(facts_get_spo(facts, "b", "unreachable", "c"));
     ck_assert(facts_get_spo(facts, "c", "unreachable", "a"));
     ck_assert(facts_get_spo(facts, "c", "unreachable", "b"));
-    ck_assert(facts_get_spo(facts, "a", "unreachable", "a")); // self loop missing
+    ck_assert(facts_get_spo(facts, "a", "unreachable", "a")); /* self loop missing */
 
     /* Verify a->b is NOT unreachable */
     ck_assert(!facts_get_spo(facts, "a", "unreachable", "b"));

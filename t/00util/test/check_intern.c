@@ -42,25 +42,25 @@ START_TEST(test_intern_unstring_basic)
     s_intern *intern = new_intern(100);
     Symbol s1 = intern_string(intern, "hello");
 
-    // Find symbol should work
+    /* find symbol should work */
     s_set_item *item1 = intern_find_symbol(intern, "hello");
     ck_assert(item1 != NULL);
     ck_assert_int_eq(item1->usage, 1);
 
-    // Intern again increases usage
+    /* intern again increases usage */
     Symbol s2 = intern_string(intern, "hello");
     ck_assert_ptr_eq(s1, s2);
     ck_assert_int_eq(item1->usage, 2);
 
-    // Unintern once decreases usage
+    /* unintern once decreases usage */
     intern_unstring(intern, s1);
     ck_assert_int_eq(item1->usage, 1);
 
-    // Unintern again deletes from set
+    /* unintern again deletes from set */
     intern_unstring(intern, s1);
     ck_assert(intern_find_symbol(intern, "hello") == NULL);
 
-    // Interning again creates a new symbol entry
+    /* interning again creates a new symbol entry */
     Symbol s3 = intern_string(intern, "hello");
     ck_assert_str_eq(symbol_to_str(s3), "hello");
     s_set_item *item2 = intern_find_symbol(intern, "hello");
@@ -99,7 +99,7 @@ START_TEST(test_intern_double_basic)
 
     ck_assert_ptr_eq(s1, s2);
     ck_assert_ptr_ne(s1, s3);
-    // Use strtod to verify the string is parsed back to the same double
+    /* use strtod to verify the string is parsed back to the same double */
     double d1 = strtod(symbol_to_str(s1), NULL);
     double d3 = strtod(symbol_to_str(s3), NULL);
     ck_assert_double_eq_tol(d1, 3.14159, 1e-9);
@@ -143,6 +143,32 @@ START_TEST(test_intern_string_view)
 }
 END_TEST
 
+START_TEST(test_intern_ref_and_churn)
+{
+    s_intern *intern = new_intern(32);
+    Symbol s = intern_string(intern, "ephemeral");
+    ck_assert_ptr_eq(s, intern_ref(intern, s));
+    s_set_item *item = intern_find_symbol(intern, "ephemeral");
+    ck_assert(item != NULL);
+    ck_assert_int_eq(item->usage, 2);
+    intern_unstring(intern, s);
+    ck_assert_int_eq(item->usage, 1);
+    intern_unstring(intern, s);
+    ck_assert(intern_find_symbol(intern, "ephemeral") == NULL);
+
+    for (int i = 0; i < 500; i++) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "sym_%d", i);
+        Symbol tmp = intern_string(intern, buf);
+        ck_assert(tmp != NULL);
+        intern_unstring(intern, tmp);
+        ck_assert(intern_find_symbol(intern, buf) == NULL);
+    }
+
+    delete_intern(intern);
+}
+END_TEST
+
 Suite *intern_suite(void)
 {
     Suite *s;
@@ -157,6 +183,7 @@ Suite *intern_suite(void)
     tcase_add_test(tc_core, test_intern_double_basic);
     tcase_add_test(tc_core, test_intern_find_symbol_str);
     tcase_add_test(tc_core, test_intern_string_view);
+    tcase_add_test(tc_core, test_intern_ref_and_churn);
     suite_add_tcase(s, tc_core);
     return s;
 }

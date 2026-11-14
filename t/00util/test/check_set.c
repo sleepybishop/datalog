@@ -633,6 +633,24 @@ START_TEST(test_set_cursor_ten)
 }
 END_TEST
 
+START_TEST(test_set_max_one_and_resize_validation)
+{
+    s_set s;
+    ck_assert_int_eq(0, set_init_checked(&s, 1));
+    ck_assert(set_add(&s, "a", 1) != NULL);
+    ck_assert(set_get(&s, "a", 1) != NULL);
+    ck_assert(set_get(&s, "missing", 7) == NULL);
+    ck_assert(set_add(&s, "b", 1) != NULL);
+    ck_assert_int_eq(2, s.count);
+    ck_assert_int_eq(-1, set_resize_checked(&s, 0));
+    ck_assert_int_eq(-1, set_resize_checked(&s, 2));
+    ck_assert_int_eq(0, set_resize_checked(&s, 8));
+    ck_assert(set_get(&s, "a", 1) != NULL);
+    ck_assert(set_get(&s, "b", 1) != NULL);
+    set_destroy(&s);
+}
+END_TEST
+
 Suite *set_suite(void)
 {
     Suite *s;
@@ -645,6 +663,7 @@ Suite *set_suite(void)
     tc_init = tcase_create("Init");
     tcase_add_test(tc_init, test_set_init_destroy);
     tcase_add_test(tc_init, test_set_new_delete);
+    tcase_add_test(tc_init, test_set_max_one_and_resize_validation);
     suite_add_tcase(s, tc_init);
     tc_add = tcase_create("Add");
     tcase_add_checked_fixture(tc_add, setup_add, teardown_add);

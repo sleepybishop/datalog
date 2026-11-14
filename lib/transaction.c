@@ -8,9 +8,8 @@
 
 void transaction_init(s_transaction *tx)
 {
-    int result = transaction_init_checked(tx);
-    assert(result == 0);
-    (void)result;
+    if (transaction_init_checked(tx) != 0)
+        abort();
 }
 
 int transaction_init_checked(s_transaction *tx)
@@ -206,7 +205,7 @@ int transaction_rollback(s_facts *facts, s_transaction *tx)
     size_t target_size = (level > 1) ? tx->savepoints[level - 2] : 0;
     pthread_mutex_unlock(&tx->state_mutex);
 
-    if (level == 1)
+    if (level == 1 || (facts->justifications_staging && level <= facts->justifications_staged_level))
         facts_justifications_discard(facts);
 
     while (tx->rollback.size > target_size) {
@@ -249,9 +248,9 @@ int transaction_rollback_push(s_facts *facts, s_transaction *tx, e_rollback_acti
             tx->rollback.entries = entries;
             tx->rollback.capacity = capacity;
         }
-        Symbol s_ref = facts_intern(facts, symbol_to_str(fact->s));
-        Symbol p_ref = facts_intern(facts, symbol_to_str(fact->p));
-        Symbol o_ref = facts_intern(facts, symbol_to_str(fact->o));
+        Symbol s_ref = facts_intern_ref(facts, fact->s);
+        Symbol p_ref = facts_intern_ref(facts, fact->p);
+        Symbol o_ref = facts_intern_ref(facts, fact->o);
         if (!s_ref || !p_ref || !o_ref) {
             if (s_ref)
                 facts_unintern(facts, s_ref);
@@ -266,6 +265,16 @@ int transaction_rollback_push(s_facts *facts, s_transaction *tx, e_rollback_acti
         entry->fact = *fact;
     }
     return 0;
+}
+
+void facts_rollback_pop_discard(s_facts *facts)
+{
+    if (!facts || facts->tx.level <= 0 || facts->tx.rollback.size == 0)
+        return;
+    s_rollback_entry entry = facts->tx.rollback.entries[--facts->tx.rollback.size];
+    facts_unintern(facts, entry.fact.s);
+    facts_unintern(facts, entry.fact.p);
+    facts_unintern(facts, entry.fact.o);
 }
 
 int transaction_acquire_writer(s_transaction *tx)

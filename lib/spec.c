@@ -163,12 +163,13 @@ p_spec spec_sort(p_spec spec)
         for (i = 0; i < count - 1; i++) {
             size_t j;
             for (j = 0; j < count - i - 1; j++) {
-                s_spec_fact *a = (s_spec_fact *)(spec + j * 4);
-                s_spec_fact *b = (s_spec_fact *)(spec + (j + 1) * 4);
-                if (fact_compare_bindings(a, b) > 0) {
-                    s_spec_fact swap = *a;
-                    *a = *b;
-                    *b = swap;
+                s_spec_fact a = {spec[j * 4], spec[j * 4 + 1], spec[j * 4 + 2], spec[j * 4 + 3]};
+                s_spec_fact b = {spec[(j + 1) * 4], spec[(j + 1) * 4 + 1], spec[(j + 1) * 4 + 2], spec[(j + 1) * 4 + 3]};
+                if (fact_compare_bindings(&a, &b) > 0) {
+                    const char *swap[4];
+                    memcpy(swap, spec + j * 4, sizeof(swap));
+                    memcpy(spec + j * 4, spec + (j + 1) * 4, sizeof(swap));
+                    memcpy(spec + (j + 1) * 4, swap, sizeof(swap));
                 }
             }
         }
@@ -217,10 +218,21 @@ int spec_cursor_next(s_spec_cursor *c, s_spec_fact *f)
             fprintf(stderr, "spec_cursor_next: NULL object\n");
             return 0;
         }
-        c->pos += 2;
         f->s = c->s;
         f->p = p;
         f->o = o;
+        if (c->spec[c->pos - 1] == c->s && c->spec[c->pos + 2] && strcmp(c->spec[c->pos + 2], ":not") == 0) {
+            f->negated = ":not";
+            if (c->spec[c->pos + 3]) {
+                c->s = c->spec[c->pos + 3];
+                c->pos += 4;
+            } else {
+                c->s = c->spec[c->pos + 4];
+                c->pos += 5;
+            }
+            return 1;
+        }
+        c->pos += 2;
         f->negated = NULL;
         return 1;
     }

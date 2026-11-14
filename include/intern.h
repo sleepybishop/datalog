@@ -8,6 +8,7 @@
 
 typedef struct symbol {
     uint64_t id;
+    s_set_item item;
     char data[];
 } s_symbol;
 
@@ -38,14 +39,14 @@ static inline const char *symbol_to_str(Symbol s)
     return s->data;
 }
 
+struct rax;
+
 typedef struct intern_page {
     struct intern_page *next;
     size_t size;
     size_t capacity;
     char data[];
 } s_intern_page;
-
-struct rax;
 
 typedef struct intern_table {
     struct rax *symbols;
@@ -72,6 +73,7 @@ double intern_get_double(s_intern *intern, const char *string);
 
 Symbol intern_string(s_intern *intern, const char *string);
 Symbol intern_string_view(s_intern *intern, const char *string, size_t len);
+Symbol intern_ref(s_intern *intern, Symbol sym);
 void intern_unstring(s_intern *intern, Symbol sym);
 
 #endif

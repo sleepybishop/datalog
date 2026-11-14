@@ -47,7 +47,7 @@ Because SPARQL has a nested structure (matching blocks inside `WHERE { ... }`), 
   } s_sparql_triple;
 
   typedef struct sparql_query {
-      char **projection_vars; // Variables in SELECT
+      char **projection_vars; /* variables in SELECT */
       s_sparql_triple *triples;
       size_t triple_count;
   } s_sparql_query;
@@ -59,7 +59,7 @@ Translate the `s_sparql_query` AST into the engine's query structures:
 2. Initialize `s_binding bindings[]` where `bindings[i].name` is a projected variable from the `SELECT` list, and `bindings[i].value` points to a `const char *` variable to receive the query results.
 
 ### D. Build Integration
-Add rules to the [Makefile](file:///home/joe/src/sleepybishop/datalog/Makefile) to compile Ragel files:
+Add rules to the [Makefile](../Makefile) to compile Ragel files:
 ```makefile
 %.c: %.rl
 	ragel -G2 -o $@ $<
@@ -74,7 +74,7 @@ Add rules to the [Makefile](file:///home/joe/src/sleepybishop/datalog/Makefile) 
 | :--- | :--- | :---: |
 | **Phase 1: Lexer & Grammar** | Write `sparql.rl` to tokenize variables, symbols, strings, and bracket punctuation. | **1.0 Day** |
 | **Phase 2: AST & Bracket Stack** | Write action hooks in Ragel to parse statements, manage bracket nesting using a simple C stack, and populate the AST. | **1.5 Days** |
-| **Phase 3: Datalog Bridge** | Write translation code converting the AST to the [spec.h](file:///home/joe/src/sleepybishop/datalog/include/spec.h)/[facts.h](file:///home/joe/src/sleepybishop/datalog/include/facts.h) query structures. | **1.0 Day** |
+| **Phase 3: Datalog Bridge** | Write translation code converting the AST to the [spec.h](../include/spec.h)/[facts.h](../include/facts.h) query structures. | **1.0 Day** |
 | **Phase 4: Tests & Cleanup** | Add check unit tests validating parsed queries against database states. | **1.0 Day** |
 | **Total** | | **~4.5 Days** |
 

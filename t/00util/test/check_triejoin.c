@@ -9,19 +9,16 @@ START_TEST(test_facts_spec_sort)
     s_facts *facts = new_facts(NULL, 100);
     ck_assert(facts != NULL);
 
-    // Populate database with facts to establish symbol usage counts
+    /* populate database with facts to establish symbol usage counts */
     facts_add_spo(facts, "alice", "friend", "bob");
     facts_add_spo(facts, "alice", "friend", "charlie");
     facts_add_spo(facts, "bob", "friend", "charlie");
     facts_add_spo(facts, "bob", "friend", "charlie2");
     facts_add_spo(facts, "bob", "friend", "charlie3");
 
-    // "friend" has usage = 5, "alice" has usage = 2, "bob" has usage = 4
+    /* "friend" has usage = 5, "alice" has usage = 2, "bob" has usage = 4 */
 
-    // We create a spec that represents the query: (?a, "friend", ?b), ("alice", "friend", ?b)
-    // In our cost-based selectivity sorting:
-    // - ("alice", "friend", ?b) has a constant and should be sorted first.
-    // - (?a, "friend", ?b) has two variables and should be sorted second.
+    /* query: (?a, "friend", ?b), ("alice", "friend", ?b); constant clause sorts first */
     p_spec spec = malloc(2 * 4 * sizeof(char *) + 2 * sizeof(char *));
     spec[0] = "?a";
     spec[1] = "friend";
@@ -36,7 +33,7 @@ START_TEST(test_facts_spec_sort)
 
     facts_spec_sort(facts, spec, 2);
 
-    // Assert that the selective constant-based clause was sorted first
+    /* assert that the selective constant-based clause was sorted first */
     ck_assert_str_eq(spec[0], "alice");
     ck_assert_str_eq(spec[4], "?a");
 
@@ -82,31 +79,33 @@ START_TEST(test_lftj_iterator_basic)
     s_lftj_iterator *it = new_lftj_iterator(facts->hexastore->trie_spo, 0, 1, 2);
     ck_assert(it != NULL);
 
-    // Open first level
+    /* open first level */
     ck_assert_int_eq(iterator_open(it), 0);
     ck_assert_str_eq(symbol_to_str(iterator_key(it)), "s1");
 
-    // Open second level
+    /* open second level */
     ck_assert_int_eq(iterator_open(it), 0);
     ck_assert_str_eq(symbol_to_str(iterator_key(it)), "p1");
 
-    // Open third level
+    /* open third level */
     ck_assert_int_eq(iterator_open(it), 0);
     ck_assert_str_eq(symbol_to_str(iterator_key(it)), "o1");
 
-    // Next at depth 3
+    /* next at depth 3 */
     ck_assert_int_eq(iterator_next(it), 0);
     ck_assert_str_eq(symbol_to_str(iterator_key(it)), "o2");
 
-    // Next again (no more elements for s1 p1)
+    /* next again (no more elements for s1 p1) */
     ck_assert_int_eq(iterator_next(it), -1);
 
-    // Up and next
-    ck_assert_int_eq(iterator_up(it), 0); // back to level 2 (p1)
+    /* up and verify parent key survived deeper EOF */
+    ck_assert_int_eq(iterator_up(it), 0);
+    ck_assert(iterator_key(it) != NULL);
+    ck_assert_str_eq(symbol_to_str(iterator_key(it)), "p1");
     ck_assert_int_eq(iterator_next(it), 0);
     ck_assert_str_eq(symbol_to_str(iterator_key(it)), "p2");
 
-    // Open level 3 under p2
+    /* open level 3 under p2 */
     ck_assert_int_eq(iterator_open(it), 0);
     ck_assert_str_eq(symbol_to_str(iterator_key(it)), "o3");
 
@@ -124,10 +123,7 @@ START_TEST(test_lftj_solve)
     facts_add_spo(facts, "bob", "friend", "charlie");
     facts_add_spo(facts, "charlie", "friend", "daniel");
 
-    // Join query: (?a, "friend", ?b), (?b, "friend", ?c)
-    // This should find two transitive friend chains:
-    // 1. alice -> bob -> charlie
-    // 2. bob -> charlie -> daniel
+    /* join query: (?a, "friend", ?b), (?b, "friend", ?c) -> 2 chains */
     p_spec spec = malloc(2 * 4 * sizeof(char *) + 2 * sizeof(char *));
     spec[0] = "?a";
     spec[1] = "friend";
@@ -244,6 +240,37 @@ START_TEST(test_lftj_ignores_transactionally_removed_facts)
 }
 END_TEST
 
+START_TEST(test_lftj_compact_spec_and_multi_db)
+{
+    s_intern *sym = new_intern(100);
+    s_facts *db = new_facts(sym, 100);
+    s_facts *delta = new_facts(sym, 100);
+
+    facts_add_spo(db, "alice", "tag", "x");
+    facts_add_spo(db, "alice", "rel", "bob");
+    facts_add_spo(db, "bob", "friend", "charlie");
+    facts_add_spo(delta, "bob", "step", "daniel");
+
+    const char *compact_spec[] = {"?a", "tag", "x", "rel", "?b", NULL, "?b", "friend", "?c", NULL, NULL};
+    s_binding *b1 = spec_bindings(compact_spec);
+    ck_assert(b1 != NULL);
+    ck_assert_int_eq(1, facts_lftj_solve(db, compact_spec, b1));
+    ck_assert_int_eq(1, facts_lftj_solve_multi(db, NULL, compact_spec, b1, NULL, NULL));
+    free(b1);
+
+    const char *multi_spec[] = {"?a", "tag", "x", "rel", "?b", NULL, "?b", "step", "?d", NULL, NULL};
+    s_facts *sources[] = {db, db, delta};
+    s_binding *b2 = spec_bindings(multi_spec);
+    ck_assert(b2 != NULL);
+    ck_assert_int_eq(1, facts_lftj_solve_multi(db, sources, multi_spec, b2, NULL, NULL));
+    free(b2);
+
+    delete_facts(delta);
+    delete_facts(db);
+    delete_intern(sym);
+}
+END_TEST
+
 Suite *triejoin_suite(void)
 {
     Suite *s;
@@ -258,6 +285,7 @@ Suite *triejoin_suite(void)
     tcase_add_test(tc_core, test_lftj_solve_repeated_vars_and_trailing_constants);
     tcase_add_test(tc_core, test_lftj_failed_bound_seek_restores_depth);
     tcase_add_test(tc_core, test_lftj_ignores_transactionally_removed_facts);
+    tcase_add_test(tc_core, test_lftj_compact_spec_and_multi_db);
     suite_add_tcase(s, tc_core);
     return s;
 }
