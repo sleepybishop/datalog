@@ -521,6 +521,13 @@ static int naive_solve_rec(s_multi_subgoal *subgoals, unsigned char *visited, in
     const char **var_s = sub->slots[0] && !*sub->slots[0] ? &cursor_s : NULL;
     const char **var_p = sub->slots[1] && !*sub->slots[1] ? &cursor_p : NULL;
     const char **var_o = sub->slots[2] && !*sub->slots[2] ? &cursor_o : NULL;
+    /* preserve repeated-variable equality without binding caller slots */
+    if (var_p && sub->slots[1] == sub->slots[0])
+        var_p = var_s;
+    if (var_o && sub->slots[2] == sub->slots[0])
+        var_o = var_s;
+    else if (var_o && sub->slots[2] == sub->slots[1])
+        var_o = var_p;
     if (var_s && var_p && var_o)
         facts_with_0(db, &fc, var_s, var_p, var_o);
     else if (var_s || var_p || var_o)

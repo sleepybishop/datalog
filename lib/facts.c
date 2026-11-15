@@ -2049,6 +2049,7 @@ static void facts_spec_sort_masked(s_facts *facts, p_spec spec, size_t count, un
     for (size_t i = 0; i < count; i++) {
         size_t best_idx = i;
         double best_cost = -1.0;
+        int best_deferred_negation = 0;
 
         for (size_t j = i; j < count; j++) {
             const char *fs = spec[j * 4 + 0];
@@ -2109,17 +2110,17 @@ static void facts_spec_sort_masked(s_facts *facts, p_spec spec, size_t count, un
                 cost *= sym ? (double)sym->usage : 0.1;
             }
 
-            if (fneg && strcmp(fneg, ":not") == 0) {
-                if (has_unbound) {
-                    cost = 1e15;
-                } else {
-                    cost = 1.0;
-                }
-            }
+            int negated = fneg && strcmp(fneg, ":not") == 0;
+            int deferred_negation = negated && has_unbound;
+            if (negated)
+                cost = 1.0;
 
-            if (best_cost < 0 || cost < best_cost) {
+            /* binding dependencies take precedence over estimated scan cost */
+            if (best_cost < 0 || deferred_negation < best_deferred_negation ||
+                (deferred_negation == best_deferred_negation && cost < best_cost)) {
                 best_cost = cost;
                 best_idx = j;
+                best_deferred_negation = deferred_negation;
             }
         }
 

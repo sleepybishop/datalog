@@ -426,6 +426,11 @@ void delete_linda_space(s_linda_space *space)
     free(space);
 }
 
+static int linda_db_locked_by_caller(s_linda_space *space)
+{
+    return transaction_writer_owned(&space->db->tx) || transaction_reader_owned(&space->db->tx);
+}
+
 int linda_out(s_linda_space *space, const char *s, const char *p, const char *o)
 {
     if (!space || !s || !p || !o)
@@ -433,6 +438,9 @@ int linda_out(s_linda_space *space, const char *s, const char *p, const char *o)
     int result = linda_operation_begin(space);
     if (result != LINDA_OK)
         return result;
+    /* multiplicity is not tracked in the database undo log */
+    if (linda_db_locked_by_caller(space))
+        goto error;
     if (facts_transaction_begin(space->db) != 0)
         goto error;
     s_fact_support support;
@@ -596,6 +604,10 @@ static int linda_rd_wait(s_linda_space *space, const s_linda_pattern *pattern, c
     int result = linda_operation_begin(space);
     if (result != LINDA_OK)
         return result;
+    if (linda_db_locked_by_caller(space)) {
+        linda_operation_end(space);
+        return LINDA_ERROR;
+    }
     unsigned int idx = pattern->cond_index;
     for (;;) {
         pthread_mutex_lock(&space->locks[idx]);
@@ -643,6 +655,10 @@ static int linda_in_wait(s_linda_space *space, const s_linda_pattern *pattern, c
     int result = linda_operation_begin(space);
     if (result != LINDA_OK)
         return result;
+    if (linda_db_locked_by_caller(space)) {
+        linda_operation_end(space);
+        return LINDA_ERROR;
+    }
     unsigned int idx = pattern->cond_index;
     for (;;) {
         pthread_mutex_lock(&space->locks[idx]);
@@ -749,6 +765,10 @@ int linda_inp_pattern(s_linda_space *space, const s_linda_pattern *pattern, char
     int result = linda_operation_begin(space);
     if (result != LINDA_OK)
         return result;
+    if (linda_db_locked_by_caller(space)) {
+        linda_operation_end(space);
+        return LINDA_ERROR;
+    }
     int peek = match_and_extract(space, pattern, NULL, 0, NULL, 0, NULL, 0, NULL, NULL, NULL);
     if (peek <= 0) {
         linda_operation_end(space);

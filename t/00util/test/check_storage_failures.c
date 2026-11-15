@@ -6,6 +6,7 @@
 
 /* fail only allocations in the thread executing the operation under test. */
 static _Thread_local int fail_allocations;
+static _Thread_local int allow_next_malloc;
 static _Thread_local size_t fail_malloc_size;
 static _Thread_local int failed_malloc;
 static int count_slabs;
@@ -17,6 +18,10 @@ void *__real_realloc(void *pointer, size_t size);
 
 void *__wrap_malloc(size_t size)
 {
+    if (fail_allocations && allow_next_malloc) {
+        allow_next_malloc = 0;
+        return __real_malloc(size);
+    }
     if (fail_allocations || (fail_malloc_size && size == fail_malloc_size)) {
         fail_malloc_size = 0;
         failed_malloc = 1;
@@ -346,6 +351,56 @@ START_TEST(test_failed_cursor_initialization_can_be_destroyed)
 }
 END_TEST
 
+static int fail_reconciliation_allocation(s_facts *facts, const s_rollback_entry *entries, size_t count, void *unused)
+{
+    (void)entries;
+    (void)count;
+    ck_assert_int_eq(facts_contains_spo(facts, "trigger", "result", "yes"), 1);
+    ck_assert_int_eq(facts_remove_spo(facts, "kept", "source", "yes"), 1);
+    ck_assert(facts_add_spo(facts, "listener", "source", "yes"));
+    /* allow delta snapshot so failure hits inside reactive eval */
+    allow_next_malloc = *(int *)unused;
+    fail_allocations = 1;
+    return 0;
+}
+
+START_TEST(test_listener_reconciliation_failure_rolls_back)
+{
+    for (int during_eval = 0; during_eval <= 1; during_eval++) {
+        s_facts *facts = new_facts(NULL, 100);
+        s_datalog_program *prog = new_datalog_program();
+        ck_assert(facts && prog);
+        ck_assert_int_eq(datalog_program_parse_rules(prog, "?x result yes :- ?x source yes ."), 0);
+        ck_assert(facts_add_spo(facts, "kept", "source", "yes"));
+        ck_assert_int_eq(facts_attach_program(facts, prog), 0);
+        delete_datalog_program(prog);
+        facts_register_tx_listener(facts, fail_reconciliation_allocation, &during_eval);
+        ck_assert_int_eq(facts_transaction_begin(facts), 0);
+        ck_assert(facts_add_spo(facts, "trigger", "source", "yes"));
+        failed_malloc = 0;
+        int result = facts_transaction_commit(facts);
+        fail_allocations = 0;
+        ck_assert_int_eq(result, -1);
+        ck_assert_int_eq(allow_next_malloc, 0);
+        if (!during_eval)
+            ck_assert_int_eq(failed_malloc, 1);
+        ck_assert_int_eq(facts_contains_spo(facts, "kept", "source", "yes"), 1);
+        ck_assert_int_eq(facts_contains_spo(facts, "kept", "result", "yes"), 1);
+        ck_assert_int_eq(facts_justification_count(facts, "kept", "result", "yes"), 1);
+        ck_assert_int_eq(facts_contains_spo(facts, "trigger", "source", "yes"), 0);
+        ck_assert_int_eq(facts_contains_spo(facts, "trigger", "result", "yes"), 0);
+        ck_assert_int_eq(facts_justification_count(facts, "trigger", "result", "yes"), 0);
+        ck_assert_int_eq(facts_contains_spo(facts, "listener", "source", "yes"), 0);
+        facts_register_tx_listener(facts, NULL, NULL);
+        ck_assert_int_eq(facts_transaction_begin(facts), 0);
+        ck_assert(facts_add_spo(facts, "recovered", "source", "yes"));
+        ck_assert_int_eq(facts_transaction_commit(facts), 0);
+        ck_assert_int_eq(facts_contains_spo(facts, "recovered", "result", "yes"), 1);
+        delete_facts(facts);
+    }
+}
+END_TEST
+
 int main(void)
 {
     Suite *suite = suite_create("Storage failures");
@@ -357,6 +412,7 @@ int main(void)
     tcase_add_test(core, test_destroyed_databases_recycle_fact_slabs);
     tcase_add_test(core, test_negation_allocation_failure_releases_cursor_locks);
     tcase_add_test(core, test_failed_cursor_initialization_can_be_destroyed);
+    tcase_add_test(core, test_listener_reconciliation_failure_rolls_back);
     suite_add_tcase(suite, core);
     SRunner *runner = srunner_create(suite);
     srunner_run_all(runner, CK_NORMAL);

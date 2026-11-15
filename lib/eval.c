@@ -1152,7 +1152,8 @@ int reactive_tx_listener(s_facts *facts, const s_rollback_entry *entries, size_t
     }
 
     facts->disable_listener = 1;
-    if (facts_justifications_stage(facts, 1) != 0) {
+    /* continue the existing staged graph when reconciling listener mutations */
+    if (!facts->justifications_staging && facts_justifications_stage(facts, 1) != 0) {
         facts->disable_listener = 0;
         return -1;
     }

@@ -31,7 +31,7 @@ static void *intern_alloc(s_intern *intern, size_t size, s_intern_page **out_pag
         return NULL;
     size = ALIGN_UP(size, 8);
     s_intern_page *page = intern->pages;
-    if (!page || page->size + size > page->capacity) {
+    if (!page || size > page->capacity - page->size) {
         page = new_page(size);
         if (!page)
             return NULL;
@@ -57,9 +57,14 @@ int intern_init_checked(s_intern *intern, unsigned long max)
     if (!intern)
         return -1;
     memset(intern, 0, sizeof(*intern));
-    intern->symbols = raxNew();
-    if (!intern->symbols)
+    rax *symbols = raxNew();
+    if (!symbols)
         return -1;
+    if (pthread_mutex_init(&intern->mutex, NULL) != 0) {
+        raxFree(symbols);
+        return -1;
+    }
+    intern->symbols = symbols;
     intern->symbols_delete = 1;
     intern->next_id = 1;
     intern->pages = NULL;
@@ -80,6 +85,7 @@ void intern_destroy(s_intern *intern)
         page = next;
     }
     intern->pages = NULL;
+    pthread_mutex_destroy(&intern->mutex);
 }
 
 s_intern *new_intern(unsigned long max)
@@ -104,11 +110,16 @@ s_set_item *intern_find_symbol(s_intern *intern, const char *string)
 {
     assert(intern);
     assert(string);
+    pthread_mutex_lock(&intern->mutex);
     void *item = NULL;
-    if (!raxFind(intern->symbols, (unsigned char *)string, strlen(string), &item))
-        return NULL;
-    s_set_item *si = (s_set_item *)item;
-    return si->usage > 0 ? si : NULL;
+    s_set_item *result = NULL;
+    if (raxFind(intern->symbols, (unsigned char *)string, strlen(string), &item)) {
+        s_set_item *si = (s_set_item *)item;
+        if (si->usage > 0)
+            result = si;
+    }
+    pthread_mutex_unlock(&intern->mutex);
+    return result;
 }
 
 Symbol intern_find_symbol_str(s_intern *intern, const char *string)
@@ -117,10 +128,8 @@ Symbol intern_find_symbol_str(s_intern *intern, const char *string)
     return i ? (Symbol)i->data : NULL;
 }
 
-Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
+static Symbol intern_string_view_locked(s_intern *intern, const char *string, size_t len)
 {
-    assert(intern);
-    assert(string);
     void *res = NULL;
     s_set_item *i = NULL;
     if (!raxFind(intern->symbols, (unsigned char *)string, len, &res)) {
@@ -135,7 +144,7 @@ Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
         sym->item.data = sym;
         sym->item.len = len;
         sym->item.hash = 0;
-        sym->item.usage = 0;
+        atomic_init(&sym->item.usage, 0);
         memcpy(sym->data, string, len);
         sym->data[len] = '\0';
 
@@ -154,6 +163,16 @@ Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
     return (Symbol)i->data;
 }
 
+Symbol intern_string_view(s_intern *intern, const char *string, size_t len)
+{
+    assert(intern);
+    assert(string);
+    pthread_mutex_lock(&intern->mutex);
+    Symbol result = intern_string_view_locked(intern, string, len);
+    pthread_mutex_unlock(&intern->mutex);
+    return result;
+}
+
 Symbol intern_string(s_intern *intern, const char *string)
 {
     assert(intern);
@@ -165,13 +184,15 @@ Symbol intern_ref(s_intern *intern, Symbol sym)
 {
     if (!intern || !sym || sym == P_LAST)
         return NULL;
+    pthread_mutex_lock(&intern->mutex);
     s_symbol *mut = (s_symbol *)sym;
-    if (mut->item.usage == 0)
-        return intern_string_view(intern, mut->data, mut->item.len);
-    if (mut->item.usage == ULONG_MAX)
-        return NULL;
-    mut->item.usage++;
-    return sym;
+    Symbol result = NULL;
+    if (mut->item.usage != ULONG_MAX) {
+        mut->item.usage++;
+        result = sym;
+    }
+    pthread_mutex_unlock(&intern->mutex);
+    return result;
 }
 
 void intern_unstring(s_intern *intern, Symbol sym)
@@ -180,18 +201,12 @@ void intern_unstring(s_intern *intern, Symbol sym)
     assert(sym);
     if (sym == P_FIRST || sym == P_LAST)
         return;
+    pthread_mutex_lock(&intern->mutex);
     s_symbol *mut = (s_symbol *)sym;
-    if (mut->item.usage == 0)
-        return;
-    mut->item.usage--;
-    if (!mut->item.usage) {
-        void *old = NULL;
-        int ret = raxRemove(intern->symbols, (unsigned char *)mut->data, mut->item.len, &old);
-        /* keep zero-use item in rax on OOM so its key can be reused safely */
-        if (ret != 1)
-            return;
-        assert(old == &mut->item);
-    }
+    if (mut->item.usage > 0)
+        mut->item.usage--;
+    /* arena storage lives until destruction; retain key for reuse */
+    pthread_mutex_unlock(&intern->mutex);
 }
 
 Symbol intern_long(s_intern *intern, long l)

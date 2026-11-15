@@ -2,6 +2,7 @@
 #define INTERN_H
 
 #include <stddef.h>
+#include <pthread.h>
 #include "set.h"
 
 #include <stdint.h>
@@ -53,6 +54,7 @@ typedef struct intern_table {
     int symbols_delete;
     uint64_t next_id;
     s_intern_page *pages;
+    pthread_mutex_t mutex;
 } s_intern;
 
 void intern_init(s_intern *intern, unsigned long max);
@@ -62,6 +64,7 @@ void intern_destroy(s_intern *intern);
 s_intern *new_intern(unsigned long max);
 void delete_intern(s_intern *intern);
 
+/* shared tables synchronize access; arena entries live until destruction */
 s_set_item *intern_find_symbol(s_intern *intern, const char *string);
 Symbol intern_find_symbol_str(s_intern *intern, const char *string);
 

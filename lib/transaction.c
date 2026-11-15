@@ -77,6 +77,8 @@ int transaction_begin(s_facts *facts, s_transaction *tx)
         return 0;
     }
     pthread_mutex_unlock(&tx->state_mutex);
+    if (transaction_reader_owned(tx))
+        return -1;
     pthread_rwlock_wrlock(&tx->rwlock);
     pthread_mutex_lock(&tx->state_mutex);
     tx->owner = self;
@@ -134,9 +136,22 @@ static int transaction_commit_impl(s_facts *facts, s_transaction *tx, int suppre
             int listener_result = 0;
             if (internal_listener)
                 listener_result = internal_listener(facts, entries, entry_count, internal_listener_data);
+            size_t listener_start = tx->rollback.size;
             if (listener_result == 0 && listener)
                 listener_result = listener(facts, entries, entry_count, listener_data);
             free(entries);
+            /* reconcile listener mutations into the closure before commit */
+            if (listener_result == 0 && !tx->io_error && internal_listener && tx->rollback.size > listener_start) {
+                size_t added_count = tx->rollback.size - listener_start;
+                entries = malloc(added_count * sizeof(*entries));
+                if (!entries) {
+                    listener_result = -1;
+                } else {
+                    memcpy(entries, tx->rollback.entries + listener_start, added_count * sizeof(*entries));
+                    listener_result = internal_listener(facts, entries, added_count, internal_listener_data);
+                    free(entries);
+                }
+            }
             if (listener_result != 0 || tx->io_error) {
                 transaction_rollback(facts, tx);
                 return -1;
@@ -365,4 +380,13 @@ void transaction_release_reader(s_transaction *tx, int acquired)
         }
     }
     assert(0 && "unbalanced transaction reader release");
+}
+
+int transaction_reader_owned(s_transaction *tx)
+{
+    for (size_t i = 0; i < TRANSACTION_READER_SLOTS; i++) {
+        if (reader_slots[i].tx == tx)
+            return reader_slots[i].depth > 0;
+    }
+    return 0;
 }

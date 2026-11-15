@@ -131,13 +131,13 @@ int read_fact(s_facts *facts, s_fact *f, char *buf, size_t buf_sz, FILE *fp)
     assert(buf);
     assert(buf_sz > 0);
     memset(f, 0, sizeof(*f));
-    if (read_string(buf, buf_sz, fp) || !buf[0] || !(f->s = facts_intern(facts, buf)))
+    if (read_string(buf, buf_sz, fp) || !(f->s = facts_intern(facts, buf)))
         return -1;
-    if (read_string(buf, buf_sz, fp) || !buf[0] || !(f->p = facts_intern(facts, buf))) {
+    if (read_string(buf, buf_sz, fp) || !(f->p = facts_intern(facts, buf))) {
         facts_unintern(facts, f->s);
         return -1;
     }
-    if (read_string(buf, buf_sz, fp) || !buf[0] || !(f->o = facts_intern(facts, buf))) {
+    if (read_string(buf, buf_sz, fp) || !(f->o = facts_intern(facts, buf))) {
         facts_unintern(facts, f->p);
         facts_unintern(facts, f->s);
         return -1;
@@ -181,7 +181,7 @@ int read_facts(s_facts *facts, FILE *fp)
         }
     }
     free(buf);
-    return 0;
+    return ferror(fp) ? -1 : 0;
 }
 
 int write_fact_log(const char *operation, const s_fact *f, FILE *fp)
@@ -248,14 +248,14 @@ int read_facts_log(s_facts *facts, FILE *fp)
             facts_unintern(facts, f.s);
             facts_unintern(facts, f.p);
             facts_unintern(facts, f.o);
-            if (!removed) {
+            if (removed <= 0) {
                 free(buf);
                 return -1;
             }
         }
     }
     free(buf);
-    return 0;
+    return ferror(fp) ? -1 : 0;
 }
 
 int write_spec(p_spec spec, FILE *fp)

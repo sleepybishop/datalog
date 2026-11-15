@@ -1,13 +1,16 @@
 #ifndef SET_H
 #define SET_H
 
+#include <stddef.h>
+#include <stdatomic.h>
+
 typedef struct set_item s_set_item;
 
 struct set_item {
     void *data;
     size_t len;
     size_t hash;
-    unsigned long usage;
+    _Atomic unsigned long usage;
 };
 
 typedef size_t (*f_hash)(const void *data, size_t len);

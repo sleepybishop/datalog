@@ -59,6 +59,8 @@ void delete_linda_pattern(s_linda_pattern *pattern);
  * Linda out(S, P, O) - Non-blocking insertion of one tuple occurrence.
  * Equal tuples are retained as distinct consumable occurrences. Facts carrying
  * derived support only are intentionally outside the Linda coordination view.
+ * tuple mutations (out, in, inp) and blocking reads (rd) return LINDA_ERROR
+ * when this thread already holds a database read guard or write transaction.
  */
 int linda_out(s_linda_space *space, const char *s, const char *p, const char *o);
 

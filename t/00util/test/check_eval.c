@@ -398,6 +398,70 @@ static int fail_after_reactive_listener(s_facts *facts, const s_rollback_entry *
     return -1;
 }
 
+typedef struct {
+    int calls;
+    int fail;
+    int observed;
+} s_mutating_listener_state;
+
+static int mutate_after_reactive_listener(s_facts *facts, const s_rollback_entry *entries, size_t entry_count, void *user_data)
+{
+    (void)entries;
+    (void)entry_count;
+    s_mutating_listener_state *state = user_data;
+    state->calls++;
+    /* listener sees the closure of the initial mutation */
+    ck_assert_int_eq(facts_contains_spo(facts, "trigger", "result", "yes"), 1);
+    ck_assert_int_eq(facts_remove_spo(facts, "kept", "source", "yes"), 1);
+    ck_assert(facts_add_spo(facts, "added", "source", "yes"));
+    ck_assert(facts_add_spo(facts, "candidate", "blocked", "yes"));
+    return state->fail ? -1 : 0;
+}
+
+static void observe_listener_closure(s_facts *facts, void *user_data)
+{
+    s_mutating_listener_state *state = user_data;
+    state->observed++;
+    ck_assert_int_eq(facts_contains_spo(facts, "added", "result", "yes"), 1);
+    ck_assert_int_eq(facts_contains_spo(facts, "kept", "result", "yes"), 0);
+    ck_assert_int_eq(facts_contains_spo(facts, "candidate", "allowed", "yes"), 0);
+}
+
+START_TEST(test_listener_mutations_reconcile_before_commit)
+{
+    for (int fail = 0; fail <= 1; fail++) {
+        s_facts *facts = new_facts(NULL, 100);
+        s_datalog_program *prog = new_datalog_program();
+        ck_assert(facts && prog);
+        ck_assert_int_eq(datalog_program_parse_rules(prog, "?x result yes :- ?x source yes .\n"
+                                                           "?x allowed yes :- ?x candidate yes , NOT(?x blocked yes) ."),
+                         0);
+        ck_assert(facts_add_spo(facts, "kept", "source", "yes"));
+        ck_assert(facts_add_spo(facts, "candidate", "candidate", "yes"));
+        ck_assert_int_eq(facts_attach_program(facts, prog), 0);
+        delete_datalog_program(prog);
+        s_mutating_listener_state state = {.fail = fail};
+        facts_register_tx_listener(facts, mutate_after_reactive_listener, &state);
+        facts_register_commit_observer(facts, observe_listener_closure, &state);
+        ck_assert_int_eq(facts_transaction_begin(facts), 0);
+        ck_assert(facts_add_spo(facts, "trigger", "source", "yes"));
+        ck_assert_int_eq(facts_transaction_commit(facts), fail ? -1 : 0);
+        ck_assert_int_eq(state.calls, 1);
+        ck_assert_int_eq(state.observed, !fail);
+        ck_assert_int_eq(facts_contains_spo(facts, "trigger", "source", "yes"), !fail);
+        ck_assert_int_eq(facts_contains_spo(facts, "trigger", "result", "yes"), !fail);
+        ck_assert_int_eq(facts_contains_spo(facts, "added", "source", "yes"), !fail);
+        ck_assert_int_eq(facts_contains_spo(facts, "added", "result", "yes"), !fail);
+        ck_assert_int_eq(facts_contains_spo(facts, "kept", "source", "yes"), fail);
+        ck_assert_int_eq(facts_contains_spo(facts, "kept", "result", "yes"), fail);
+        ck_assert_int_eq(facts_contains_spo(facts, "candidate", "allowed", "yes"), fail);
+        ck_assert_int_eq(facts_justification_count(facts, "added", "result", "yes"), !fail);
+        ck_assert_int_eq(facts_justification_count(facts, "kept", "result", "yes"), fail);
+        delete_facts(facts);
+    }
+}
+END_TEST
+
 START_TEST(test_listener_failure_rolls_back_reactive_closure)
 {
     s_facts *db = new_facts(NULL, 1000);
@@ -848,6 +912,7 @@ Suite *eval_suite(void)
     tcase_add_test(tc_core, test_eval_is_one_observable_transaction);
     tcase_add_test(tc_core, test_program_attachment_owns_copy_and_recomputes);
     tcase_add_test(tc_core, test_listener_failure_rolls_back_reactive_closure);
+    tcase_add_test(tc_core, test_listener_mutations_reconcile_before_commit);
     tcase_add_test(tc_core, test_justification_graph_tracks_alternative_grounded_proofs);
     tcase_add_test(tc_core, test_justification_graph_tracks_recursive_chain);
     tcase_add_test(tc_core, test_justification_retraction_does_not_churn_unrelated_closure);

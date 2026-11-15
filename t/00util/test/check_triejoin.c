@@ -240,6 +240,43 @@ START_TEST(test_lftj_ignores_transactionally_removed_facts)
 }
 END_TEST
 
+START_TEST(test_lftj_negation_preserves_repeated_variable_equality)
+{
+    const char *patterns[][3] = {
+        {"?x", "edge", "?x"},
+        {"?x", "?x", "target"},
+        {"source", "?x", "?x"},
+        {"?x", "?x", "?x"},
+    };
+    const char *nonmatches[][3] = {
+        {"a", "edge", "b"},
+        {"a", "b", "target"},
+        {"source", "a", "b"},
+        {"a", "a", "b"},
+    };
+    const char *matches[][3] = {
+        {"a", "edge", "a"},
+        {"a", "a", "target"},
+        {"source", "a", "a"},
+        {"a", "a", "a"},
+    };
+    for (size_t i = 0; i < sizeof(patterns) / sizeof(patterns[0]); i++) {
+        s_facts *facts = new_facts(NULL, 100);
+        ck_assert(facts != NULL);
+        ck_assert(facts_add_spo(facts, nonmatches[i][0], nonmatches[i][1], nonmatches[i][2]) != NULL);
+        const char *spec[] = {":not", patterns[i][0], patterns[i][1], patterns[i][2], NULL, NULL};
+        const char *x = NULL;
+        s_binding bindings[] = {{"?x", &x}, {NULL, NULL}};
+        ck_assert_int_eq(1, facts_lftj_solve(facts, spec, bindings));
+        ck_assert(x == NULL);
+        ck_assert(facts_add_spo(facts, matches[i][0], matches[i][1], matches[i][2]) != NULL);
+        ck_assert_int_eq(0, facts_lftj_solve(facts, spec, bindings));
+        ck_assert(x == NULL);
+        delete_facts(facts);
+    }
+}
+END_TEST
+
 START_TEST(test_lftj_compact_spec_and_multi_db)
 {
     s_intern *sym = new_intern(100);
@@ -285,6 +322,7 @@ Suite *triejoin_suite(void)
     tcase_add_test(tc_core, test_lftj_solve_repeated_vars_and_trailing_constants);
     tcase_add_test(tc_core, test_lftj_failed_bound_seek_restores_depth);
     tcase_add_test(tc_core, test_lftj_ignores_transactionally_removed_facts);
+    tcase_add_test(tc_core, test_lftj_negation_preserves_repeated_variable_equality);
     tcase_add_test(tc_core, test_lftj_compact_spec_and_multi_db);
     suite_add_tcase(s, tc_core);
     return s;

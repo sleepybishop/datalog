@@ -30,6 +30,10 @@ physical change summary, including changes made by reactive evaluation.
 Reactive and application transaction listeners are fallible. A listener error
 rolls back the base mutation and every derived mutation produced during that
 commit; observers are not called for the failed transaction.
+The application listener sees the initial reactive closure. Any mutations it
+makes are reconciled by the reactive engine before commit; the application
+listener is called only once. Errors during reconciliation roll back the whole
+transaction as well.
 
 Reactive retraction is dependency-directed. The runtime removes proofs that
 reference a disappeared positive support or a newly present negated support,
@@ -68,6 +72,14 @@ is opaque. Direct database removals are not a supported way to manage Linda
 multiplicity, so coordination tuples should be inserted and consumed through the
 Linda API.
 
+Linda tuple mutations own their complete transaction boundary. Calling `out`,
+`in`, `inp`, or blocking `rd` (including timed and compiled-pattern variants)
+while the calling thread already holds a read guard or write lock/transaction on
+the space's database returns `LINDA_ERROR` without changing tuples or
+multiplicity. Non-blocking `rdp` remains usable under an active read guard or
+transaction. An enclosing database transaction cannot roll back Linda's separate
+multiplicity state.
+
 The raw `linda_space_facts()` accessor is retained for source compatibility but
 returns `NULL` after close and must not be retained across deletion. New code
 should use `linda_space_facts_read_begin()`/`linda_space_facts_read_end()` for
@@ -90,6 +102,12 @@ Legacy lookup functions returning internal facts, symbols, or strings expose
 borrowed storage. Callers must keep a fact read guard active for the entire use.
 Snapshot and copy APIs are the default choice across thread or transaction
 boundaries.
+
+Symbol tables may be shared by concurrent databases. Each table synchronizes
+its own lookups and reference changes. Zero-reference symbols remain allocated
+and reusable until table destruction, while lookups hide them until referenced
+again. Storage therefore grows with distinct vocabulary, not repeated use of
+the same tuples. Destroy a shared symbol table only after all its users finish.
 
 ## Allocation failures
 

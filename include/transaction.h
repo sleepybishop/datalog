@@ -70,5 +70,6 @@ int transaction_writer_owned(s_transaction *tx);
 
 int transaction_acquire_reader(s_transaction *tx);
 void transaction_release_reader(s_transaction *tx, int acquired);
+int transaction_reader_owned(s_transaction *tx);
 
 #endif

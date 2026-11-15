@@ -52,6 +52,59 @@ START_TEST(test_linda_duplicate_tuples_are_a_multiset)
 }
 END_TEST
 
+START_TEST(test_linda_rejects_nested_mutations)
+{
+    alarm(10);
+    s_linda_space *space = new_linda_space(100);
+    ck_assert(space != NULL);
+    s_facts *facts = linda_space_facts(space);
+    s_linda_pattern *pattern = new_linda_pattern("same", "queue", "item");
+    ck_assert(pattern != NULL);
+    ck_assert_int_eq(linda_out(space, "same", "queue", "item"), LINDA_OK);
+    ck_assert_int_eq(linda_out(space, "same", "queue", "item"), LINDA_OK);
+
+    for (int commit = 0; commit <= 1; commit++) {
+        ck_assert_int_eq(facts_transaction_begin(facts), 0);
+        ck_assert_int_eq(linda_out(space, "same", "queue", "item"), LINDA_ERROR);
+        ck_assert_int_eq(linda_out(space, "new", "queue", "item"), LINDA_ERROR);
+        ck_assert_int_eq(linda_rd(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), LINDA_ERROR);
+        ck_assert_int_eq(linda_rd_timed(space, "missing", "queue", "item", NULL, 0, NULL, 0, NULL, 0, 10), LINDA_ERROR);
+        ck_assert_int_eq(linda_rd_pattern_timed(space, pattern, NULL, 0, NULL, 0, NULL, 0, 10), LINDA_ERROR);
+        ck_assert_int_eq(linda_rdp(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), 1);
+        ck_assert_int_eq(linda_inp(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), LINDA_ERROR);
+        ck_assert_int_eq(linda_in(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), LINDA_ERROR);
+        ck_assert_int_eq(linda_in_timed(space, "missing", "queue", "item", NULL, 0, NULL, 0, NULL, 0, 10), LINDA_ERROR);
+        ck_assert_int_eq(linda_inp_pattern(space, pattern, NULL, 0, NULL, 0, NULL, 0), LINDA_ERROR);
+        ck_assert_int_eq(linda_in_pattern_timed(space, pattern, NULL, 0, NULL, 0, NULL, 0, 10), LINDA_ERROR);
+        /* rejection leaves the caller transaction open and usable */
+        ck_assert(facts_add_spo(facts, "outer", "state", "active"));
+        ck_assert_int_eq(commit ? facts_transaction_commit(facts) : facts_transaction_rollback(facts), 0);
+        ck_assert_int_eq(facts_contains_spo(facts, "outer", "state", "active"), commit);
+        ck_assert_int_eq(facts_contains_spo(facts, "new", "queue", "item"), 0);
+    }
+
+    s_linda_facts_guard guard;
+    const s_facts *guarded_facts = NULL;
+    ck_assert_int_eq(linda_space_facts_read_begin(space, &guard, &guarded_facts), LINDA_OK);
+    ck_assert_int_eq(facts_transaction_begin(facts), -1);
+    ck_assert_int_eq(linda_out(space, "same", "queue", "item"), LINDA_ERROR);
+    ck_assert_int_eq(linda_rd(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), LINDA_ERROR);
+    ck_assert_int_eq(linda_rd_timed(space, "missing", "queue", "item", NULL, 0, NULL, 0, NULL, 0, 10), LINDA_ERROR);
+    ck_assert_int_eq(linda_rdp(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), 1);
+    ck_assert_int_eq(linda_inp(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), LINDA_ERROR);
+    ck_assert_int_eq(linda_in(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), LINDA_ERROR);
+    ck_assert_int_eq(linda_in_timed(space, "missing", "queue", "item", NULL, 0, NULL, 0, NULL, 0, 10), LINDA_ERROR);
+    linda_space_facts_read_end(&guard);
+
+    ck_assert_int_eq(linda_inp(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), 1);
+    ck_assert_int_eq(linda_inp(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), 1);
+    ck_assert_int_eq(linda_inp(space, "same", "queue", "item", NULL, 0, NULL, 0, NULL, 0), 0);
+    delete_linda_pattern(pattern);
+    delete_linda_space(space);
+    alarm(0);
+}
+END_TEST
+
 START_TEST(test_linda_isolates_derived_facts_from_coordination)
 {
     s_linda_space *space = new_linda_space(1000);
@@ -489,6 +542,7 @@ Suite *linda_suite(void)
 
     tcase_add_test(tc_core, test_linda_basic_out_in);
     tcase_add_test(tc_core, test_linda_duplicate_tuples_are_a_multiset);
+    tcase_add_test(tc_core, test_linda_rejects_nested_mutations);
     tcase_add_test(tc_core, test_linda_isolates_derived_facts_from_coordination);
     tcase_add_test(tc_core, test_linda_multiset_projects_to_datalog_set);
     tcase_add_test(tc_core, test_linda_consumes_long_tuple);

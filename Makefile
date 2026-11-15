@@ -137,8 +137,9 @@ check-asan:
 	ASAN_OPTIONS=detect_leaks=0 $(MAKE) -B check CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
 
 check-tsan:
-	$(MAKE) -B t/00util/test/check_linda t/00util/test/check_storage_failures t/00util/test/check_facts t/00util/test/check_eval CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
+	$(MAKE) -B t/00util/test/check_linda t/00util/test/check_intern t/00util/test/check_storage_failures t/00util/test/check_facts t/00util/test/check_eval CFLAGS='-O1 -g -W -Wall -Werror -std=c11 -pedantic -Wno-unused -pthread -fsanitize=thread -fno-omit-frame-pointer' LDFLAGS='-fsanitize=thread'
 	./t/00util/test/check_linda
+	./t/00util/test/check_intern
 	./t/00util/test/check_storage_failures
 	cd t/00util/test && ./check_facts
 	./t/00util/test/check_eval

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sparql.h"
+#include "rule.h"
 
 s_facts *g_f;
 s_intern *g_sym;
@@ -41,6 +42,35 @@ START_TEST(test_sparql_insert_is_atomic)
     int rc = facts_sparql_insert(g_f, "INSERT DATA { <atomic-s> <atomic-p> <atomic-o> . <incomplete> }");
     ck_assert_int_eq(-1, rc);
     ck_assert(facts_get_spo(g_f, "atomic-s", "atomic-p", "atomic-o") == NULL);
+}
+END_TEST
+
+START_TEST(test_sparql_insert_asserts_existing_derived_fact)
+{
+    s_datalog_program *program = new_datalog_program();
+    ck_assert(program != NULL);
+    ck_assert_int_eq(0, datalog_program_parse_rules(program, "?x <insert-result> yes :- ?x <insert-source> yes ."));
+    ck_assert_int_eq(0, facts_attach_program(g_f, program));
+    delete_datalog_program(program);
+
+    ck_assert_int_eq(1, facts_sparql_insert(g_f, "INSERT DATA { <item> <insert-source> <yes> }"));
+    s_fact_support support;
+    ck_assert_int_eq(1, facts_get_support_spo(g_f, "item", "insert-result", "yes", &support));
+    ck_assert_int_eq(0, support.asserted);
+    ck_assert_int_eq(1, support.derived);
+
+    ck_assert_int_eq(1, facts_sparql_insert(g_f, "INSERT DATA { <item> <insert-result> <yes> }"));
+    ck_assert_int_eq(0, facts_sparql_insert(g_f, "INSERT DATA { <item> <insert-result> <yes> }"));
+    ck_assert_int_eq(1, facts_get_support_spo(g_f, "item", "insert-result", "yes", &support));
+    ck_assert_int_eq(1, support.asserted);
+    ck_assert_int_eq(1, support.derived);
+
+    ck_assert_int_eq(0, facts_transaction_begin(g_f));
+    ck_assert_int_eq(1, facts_remove_spo(g_f, "item", "insert-source", "yes"));
+    ck_assert_int_eq(0, facts_transaction_commit(g_f));
+    ck_assert_int_eq(1, facts_get_support_spo(g_f, "item", "insert-result", "yes", &support));
+    ck_assert_int_eq(1, support.asserted);
+    ck_assert_int_eq(0, support.derived);
 }
 END_TEST
 
@@ -100,6 +130,30 @@ START_TEST(test_sparql_negation)
     }
     ck_assert_int_eq(count, 1);
     facts_with_cursor_destroy(&c);
+}
+END_TEST
+
+START_TEST(test_sparql_negation_waits_for_unconstrained_generator)
+{
+    const char *queries[] = {
+        "SELECT ?s WHERE { NOT ?s <e> <d> . ?s ?p ?o }",
+        "SELECT ?s WHERE { ?s ?p ?o . NOT ?s <e> <d> }",
+    };
+    for (size_t i = 0; i < sizeof(queries) / sizeof(queries[0]); i++) {
+        s_facts_with_cursor cursor;
+        s_binding *bindings = NULL;
+        ck_assert_int_eq(0, facts_sparql_eval(g_f, queries[i], &cursor, &bindings));
+        int count = 0;
+        while (facts_with_cursor_next(&cursor)) {
+            const char *subject = *bindings_get(bindings, "?s");
+            ck_assert(strcmp(subject, "g") == 0 || strcmp(subject, "h") == 0);
+            count++;
+        }
+        ck_assert_int_eq(0, facts_with_cursor_error(&cursor));
+        ck_assert_int_eq(2, count);
+        facts_with_cursor_destroy(&cursor);
+        free(bindings);
+    }
 }
 END_TEST
 
@@ -515,9 +569,11 @@ Suite *sparql_suite(void)
     tcase_add_checked_fixture(tc_core, setup, teardown);
     tcase_add_test(tc_core, test_sparql_parse_error);
     tcase_add_test(tc_core, test_sparql_insert_is_atomic);
+    tcase_add_test(tc_core, test_sparql_insert_asserts_existing_derived_fact);
     tcase_add_test(tc_core, test_sparql_single_triple);
     tcase_add_test(tc_core, test_sparql_multiple_triples);
     tcase_add_test(tc_core, test_sparql_negation);
+    tcase_add_test(tc_core, test_sparql_negation_waits_for_unconstrained_generator);
     tcase_add_test(tc_core, test_clue_murder_mystery);
     tcase_add_test(tc_core, test_sparql_prefix);
     tcase_add_test(tc_core, test_sparql_limit_offset);

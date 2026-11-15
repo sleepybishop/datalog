@@ -1002,7 +1002,12 @@ int facts_sparql_insert(s_facts *facts, const char *query)
 
     int added_count = 0;
     for (size_t i = 0; i < triple_count; i++) {
-        if (facts_contains_spo(facts, triples[i].s, triples[i].p, triples[i].o) <= 0) {
+        s_fact_support support;
+        if (facts_get_support_spo(facts, triples[i].s, triples[i].p, triples[i].o, &support) < 0) {
+            facts_transaction_rollback(facts);
+            goto error;
+        }
+        if (!support.asserted) {
             if (!facts_add_spo(facts, triples[i].s, triples[i].p, triples[i].o)) {
                 facts_transaction_rollback(facts);
                 goto error;
